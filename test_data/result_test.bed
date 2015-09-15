@@ -1,0 +1,3 @@
+# chrom	start	end	name	n_reads	strand	n_uniq	best_qual_A	best_qual_B	spliced_at_begin	spliced_at_end	tissues	tiss_counts	edits	anchor_overlap	breakpoints
+CDR1as_locus	728	2213	cdr1as_test_circ_000001	3	+	3	40	40	0	0	any_tissue,test_tissue1,test_tissue2	1,1,1	0	0	1
+# chrom	start	end	name	n_reads	strand	n_uniq	best_qual_A	best_qual_B	spliced_at_begin	spliced_at_end	tissues	tiss_counts	edits	anchor_overlap	breakpoints
