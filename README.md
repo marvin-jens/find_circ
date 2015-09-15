@@ -37,13 +37,17 @@ Each version deemed stable is tagged and a brief summary of the improvements
 is given here:
     
   - **v1** : as used in Memczak et al. 2013
-  - **v1.1** : by default no longer report junctions with only one uniquely aligned anchor. Original behaviour can be restored using the 
-    `--halfuniq` switch.
-  - **v1.2** : fix the uniqueness handling. Occasionally reads would have 
-  either anchor align uniquely, but never both. These rare cases now get 
-flagged as "NO_UNIQ_BRIDGES". Other labels have been extended for clarity
-("UNAMBIGUOUS_BP" instead of "UNAMBIGUOUS"), in a manner that preserves 
-functionality of `grep` commands.
+  - **v1.2** : 
+    - by default no longer report junctions with only one uniquely aligned anchor. Original behaviour can be restored using the 
+      `--halfuniq` switch.
+    - fix the uniqueness handling. Occasionally reads would have 
+      either anchor align uniquely, but never both. These rare cases now get 
+      flagged as "NO_UNIQ_BRIDGES". 
+    - support all chromosomes in one fasta file
+    - store the size of each chromosome upon first access, pad violations of chromosome bounds by padding with 'N'
+    - category labels have been extended for clarity
+      ("UNAMBIGUOUS_BP" instead of "UNAMBIGUOUS", etc.), in a manner which preserves 
+      functionality of `grep` commands.
   - **v2** : (not released yet): produce multiple anchor lengths to potentially 
 yield more junctions with unique anchor mappings.
 
