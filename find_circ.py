@@ -313,7 +313,7 @@ class GenomeAccessor(Accessor):
 
         self.system = system
         self.data = None
-        fname = os.path.join(path,chrom+".fa")
+        fname = os.path.join(path)
         try:
             self.data = indexed_fasta(fname)
         except IOError:
