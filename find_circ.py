@@ -172,7 +172,7 @@ class indexed_fasta(object):
 
         if end > size:
             pad_end = end - size
-            end = end
+            end = size
 
         l_start = start / ldata
         l_end = end / ldata
