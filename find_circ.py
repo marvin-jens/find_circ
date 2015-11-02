@@ -416,7 +416,6 @@ else:
 samples.append(('',options.name))
     
 from collections import defaultdict
-from sequence_data import rev_comp
 
 minmapscore = options.asize * (-2)
 
