@@ -32,9 +32,9 @@ cdr1as_test_out/sites.bed: anchors_cdr1as_test.fastq CDR1as_locus.fa
 	@printf "\n>>> aligning anchors and piping through find_circ.py\n\n"
 	mkdir -p cdr1as_test_out
 	bowtie2 -q -U anchors_cdr1as_test.fastq -x bt2_cdr1as_locus --reorder --mm -M20 --score-min=C,-15,0 2> bt2_secondpass.log | \
-		../find_circ.py -G CDR1as_locus.fa -n test -p cdr1as_test_ -s cdr1as_test_out/sites.log \
-		> cdr1as_test_out/sites.bed \
-		2> cdr1as_test_out/sites.reads
+		../find_circ.py -G CDR1as_locus.fa -n test -p cdr1as_test_ -s cdr1as_test_out/sites.log -R cdr1as_test_out/sites.reads \
+		> cdr1as_test_out/sites.bed
+
 
 
 
@@ -57,7 +57,7 @@ ext_test_out/sites.bed: anchors_ext_test.fastq $(GENOME_HG19)
 	@printf "\n>>> aligning anchors and piping through find_circ.py\n\n"
 	mkdir -p ext_test_out
 	bowtie2 -q -U anchors_ext_test.fastq -x $(INDEX_HG19) --reorder --mm -M20 --score-min=C,-15,0 2> bt2_secondpass.log | \
-		../find_circ.py -G $(GENOME_HG19) -n test -p ext_test_ -s ext_test_out/sites.log \
+		../find_circ.py -G $(GENOME_HG19) -n test -p ext_test_ -s ext_test_out/sites.log --halfuniq \
 		> ext_test_out/sites.bed \
 		2> ext_test_out/sites.reads
 

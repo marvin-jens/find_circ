@@ -7,6 +7,7 @@ import logging
 #logging.basicConfig(level=logging.DEBUG)
 import mmap
 import optparse
+import traceback
 
 COMPLEMENT = {
     'a' : 't',
@@ -627,7 +628,7 @@ else:
     bam_out = None
 
 try:
-    for A,B in grouper(2,sam):
+    for pair_num,(A,B) in enumerate(grouper(2,sam)):
         #print A
         #print B
         N['total'] += 1
@@ -712,7 +713,17 @@ try:
             warning("unhandled read: A='%s' B='%s'" % (A,B))
             
 except KeyboardInterrupt:
-    pass
+    sam_line = pair_num * 2
+    fastq_line = pair_num * 8
+
+    logging.warning("KeyboardInterrupt by user while processing alignment pair {pair_num}, on input starting at SAM line {sam_line}, FASTQ line {fastq_line}".format(**locals()))
+except:        
+    sam_line = pair_num * 2
+    fastq_line = pair_num * 8
+
+    logging.error("Unhandled exception raised while processing alignment pair {pair_num}, on input starting at SAM line {sam_line}, FASTQ line {fastq_line}".format(**locals()))
+    traceback.print_exc(file=sys.stderr)
+    sys.exit(1)
 
 def output(cand,prefix):
     print "#","\t".join(['chrom','start','end','name','n_reads','strand','n_uniq','uniq_bridges','best_qual_left','best_qual_right','spliced_at_begin','spliced_at_end','tissues','tiss_counts','edits','anchor_overlap','breakpoints','signal','strandmatch','category'])
