@@ -2,7 +2,7 @@
 import pysam
 import numpy
 import os,sys,re
-from optparse import OptionParser
+from optparse import *
 from logging import error
 
 COMPLEMENT = {
@@ -54,7 +54,9 @@ Extract anchor sequences from unmapped reads. Optionally permute.
 parser = OptionParser(usage=usage)
 parser.add_option("-a","--anchor",dest="asize",type=int,default=20,help="anchor size")
 parser.add_option("-q","--minqual",dest="minqual",type=int,default=5,help="min avg. qual along both anchors (default=5)")
-parser.add_option("-r","--rev",dest="rev",type="choice",choices=["A","B","R","N","C","P"],default="N",help="P-ermute read parts or reverse A,B,R,C,N for control purposes.")
+parser.add_option("-r","--rev",dest="rev",type="choice",choices=["A","B","R","N","C","P"],default="N",help="P-ermute read parts or reverse A,B,R,C,N for control")
+parser.add_option("-R","--reads",dest="reads",action="store_true",default=False,help="instead of unmapped reads from BAM, input is sites.reads from find_circ.py")
+parser.add_option("-F","--fasta",dest="fasta",action="store_true",default=False,help="instead of unmapped reads from BAM, input is FASTA file")
 
 options,args = parser.parse_args()
 
@@ -129,8 +131,42 @@ def handle_read(read):
     print "+"
     print B_f(qual[-options.asize:])
 
-for read in pysam.Samfile(args[0],'rb'):
-    handle_read(read)
+if options.reads:
+    N = 0
+    for line in file(args[0]):
+        name,seq = line.rstrip().split('\t').replace(" ","_")
+        N +=1
+        
+        class Item(object):
+            pass
+        read = Item()
+        read.qname = "%s_%d" % (name,N)
+        read.is_unmapped=True
+        read.seq = seq
+        read.qual = "b"*len(seq)
+
+        handle_read(read)
+
+elif options.fasta:
+    from sequence_data.io import fasta_chunks
+    N = 0
+    for name,seq in fasta_chunks(file(args[0])):
+        N += 1
+        name = name.replace(" ","_")
+        class Item(object):
+            pass
+
+        read = Item()
+        read.qname = "%s_%d" % (name,N)
+        read.is_unmapped=True
+        read.seq = seq
+        read.qual = "b"*len(seq)
+
+        handle_read(read)
+        
+else:
+    for read in pysam.Samfile(args[0],'rb'):
+        handle_read(read)
 
 for read in perm_burn_in:
     handle_read(read)

@@ -371,6 +371,7 @@ parser.add_option("-B","--bam",dest="bam",default="",help="filename to store anc
 parser.add_option("-n","--name",dest="name",default="unknown",help="tissue/sample name to use for unknown read-name patterns (default='unknown')")
 parser.add_option("-q","--min_uniq_qual",dest="min_uniq_qual",type=int,default=2,help="minimal uniqness for anchor alignments (default=2)")
 parser.add_option("","--halfunique",dest="halfunique",default=False,action="store_true",help="also report junctions where only one anchor aligns uniquely (less likely to be true)")
+parser.add_option("","--report_nobridges",dest="report_nobridges",default=False,action="store_true",help="also report junctions lacking at least a single read where both anchors, jointly align uniquely (not recommended. Much less likely to be true.)")
 parser.add_option("","--stranded",dest="stranded",default=False,action="store_true",help="use if the reads are stranded. By default it will be used as control only, use with --strandpref for breakpoint disambiguation.")
 parser.add_option("-s","--stats",dest="stats",default="runstats.log",help="where to put stats")
 parser.add_option("","--noncanonical",dest="noncanonical",default=False,action="store_true",help="relax the GU/AG constraint (will produce many more ambiguous counts)")
@@ -741,7 +742,11 @@ def output(cand,prefix):
             if (best_qual_A < options.min_uniq_qual) or (best_qual_B < options.min_uniq_qual):
                 N['anchor_not_uniq'] += 1
                 continue
-            
+
+        if (uniq_bridges == 0) and not options.report_nobridges:
+                N['no_uniq_bridges'] += 1
+                continue
+
         name = "%s%s_%06d" % (options.prefix,prefix,n)
         n += 1
         #sys.stderr.write("%s\t%s\n" % (name,"\t".join(sorted(reads))))
@@ -756,7 +761,7 @@ def output(cand,prefix):
         if best_qual_A > 0 and best_qual_B > 0 and uniq_bridges > 0:
             categories.append("ANCHOR_UNIQUE")
         if uniq_bridges == 0:
-            categories.append("NO_UNIQ_BRIDGES")
+            categories.append("NO_UNIQ_BRIDGES")          
         if n_hits == 1:
             categories.append("UNAMBIGUOUS_BP")
         if min_anchor_ov == 0 and min_edit == 0: 
