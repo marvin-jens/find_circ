@@ -8,9 +8,10 @@ cdr1as_test: cdr1as_test_out/splice_sites.bed
 	../cmp_bed.py cdr1as_test_out/splice_sites.bed cdr1as_reference.bed > /dev/null
 	
 clean:
-	rm bt2*
-	rm *.bam
-	rm -rf test_out
+	rm -f bt2*
+	rm -f *.bam
+	rm -f *.byo_index anchors_cdr1as_test.fastq
+	rm -rf cdr1as_test_out hek_test_out
 
 bt2_cdr1as_locus.4.bt2: CDR1as_locus.fa
 	@printf ">>> building bowtie2 index\n\n"
