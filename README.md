@@ -36,19 +36,22 @@ The current code (v1.2) has some small bug fixes and improvements.
 Each version deemed stable is tagged and a brief summary of the improvements 
 is given here:
     
-  - **v1** : as used in Memczak et al. 2013
+  - **v1** : as used in [Memczak *et al.* 2013](http://www.ncbi.nlm.nih.gov/pubmed/23446348))
   - **v1.2** : 
-    - by default no longer report junctions with only one uniquely aligned anchor. Original behaviour can be restored using the 
-      `--halfuniq` switch.
     - fix the uniqueness handling. Occasionally reads would have 
       either anchor align uniquely, but never both. These rare cases now get 
       flagged as "NO_UNIQ_BRIDGES". 
-    - support all chromosomes in one fasta file
+    - support all chromosomes in one FASTA file
     - store the size of each chromosome upon first access, pad violations of chromosome bounds by padding with 'N'
     - category labels have been extended for clarity
       ("UNAMBIGUOUS_BP" instead of "UNAMBIGUOUS", etc.), in a manner which preserves 
       functionality of `grep` commands.
-  - **v2** : (not released yet): produce multiple anchor lengths to potentially 
+    - by default no longer report junctions with only one uniquely aligned anchor. Original behaviour can be restored using the 
+      `--halfuniq` switch.
+    - by default no longer report junctions that lack a read where both anchors align uniquely (NO_UNIQ_BRIDGES keyword).
+      Original behaviour can be restored using the `--report_nobridge` switch
+      
+  - **v2** : (*under development*): produce multiple anchor lengths to potentially 
 yield more junctions with unique anchor mappings.
 
 ### License ###
@@ -84,7 +87,7 @@ get the most fresh versions:
 At this point you should have everything to run a built-in test data set
 ```
     cd test_data
-    ./run_test.sh
+    make
 ```
 If you get error messages here, first make sure the dependencies are
 really installed correctly and run on their own.
@@ -93,21 +96,33 @@ or any other third-party packages! Sorry, but not enough time for this.
 If you are sure that the problem is with our code, just zip the test_data
 folder and e-mail it to us. MAYBE, we can help.
 
+In case you are working with human data and have the hg19 genome and a bowtie2 
+index around, there is an additional test/sanity-check you can run:
+    
+```
+    cd test_data
+    make hek_test2 \
+        GENOME_HG19=/path_to/hg19.fa \
+        INDEX_HG19=/path_to/bowtie2_hg19_index
+```
+(obviously, the paths to genome and index will have to be changed for this to work)
+This will push known spliced reads, belonging to previously identified junctions, 
+through `find_circ.py`, then take the found spliced reads and run them 
+through `find_circ.py` a second time. Ultimately, it compares the detected splice 
+sites and ensures the two sets are identical.
+
 If everything goes well you can get started with your real data! :)   
 You need to have the reference genome and a bowtie2 index for it.
 As an example, let's assume you use C.elegans genome ce6 (WS190):
 
 ```
-    wget -c http://hgdownload.cse.ucsc.edu/goldenPath/ce6/bigZips/chromFa.tar.gz -P tmp
-    mkdir genome
-    cd genome; tar -xzf ../tmp/chromFa.tar.gz; cd ..
-    cat genome/chr*.fa > genome/ce6.fa
+    wget -c http://hgdownload.cse.ucsc.edu/goldenPath/ce6/bigZips/chromFa.tar.gz \
+        -O - | gzip -dc | tar -xO > ce6.fa
 ```
-This will retrieve the genome from the UCSC website, unpack it into a 
-folder 'genome' and create one big fasta file with all chromosomes to 
-build the index:
+This will retrieve the genome from the UCSC website, unpack it into a single 
+fasta file with all chromosomes to build the index:
 ```
-    bowtie2-build genome/ce6.fa bt2_ce6 
+    bowtie2-build ce6.fa bt2_ce6 
 ```
 
 ### How to use the unmapped2anchors.py script ###
@@ -117,68 +132,74 @@ keep the part that can not be mapped contiguously to look for splice-
 junctions afterwards. The genome alignments can be used for gene 
 expression analysis and the unmapped reads will represent a fraction of
 the input, thus downstream analysis will be faster.
-(Note that --phred64 is only for Illumina quality scores. Sanger scores
-are --phred33, but that's the default anyway, so it could be omitted)
-
 ```
-    bowtie2 -p16 --very-sensitive --phred64 --mm -M20 --score-min=C,-15,0 \
-    -x bt2_ce6 -q -U <your_reads.qfa.gz> 2> bowtie2.log  \
+    bowtie2 -p16 --very-sensitive --score-min=C,-15,0 --mm \
+    -x bt2_ce6 -q -U <your_reads.fastq.gz> 2> bowtie2.log  \
     | samtools view -hbuS - | samtools sort - test_vs_ce6
 ```
-put the unaligned reads aside and split good quality reads into anchors for 
-independent mapping (used to identify splice junctions)
+single out the unaligned reads and split those with good quality into anchors
+for independent mapping (used to identify splice junctions)
 ```
-    samtools view -hf 4 test_vs_ce6.bam | samtools view -Sb - > unmapped_ce6.bam
-    ./unmapped2anchors.py unmapped_ce6.bam | gzip > ce6_anchors.qfa.gz
+    # get the unmapped and pipe through unmapped2anchors.py
+    samtools view -hf 4 test_vs_ce6.bam | samtools view -Sb - | \
+        ./unmapped2anchors.py unmapped_ce6.bam | gzip \
+            > ce6_anchors.fastq.gz
 ```
 
 ### How to use find_circ.py ###
-
 
 Now we have everything to screen for spliced reads, from either linear or
 head-to-tail (circular) splicing:
 
 ```
-    mkdir <run_folder>
-    bowtie2 -p 16 --reorder --mm -M20 --score-min=C,-15,0 -q -x bt2_ce6 \
-    -U ce6_anchors.qfa.gz | ./find_circ.py -G genome -p ce6_test_ 
-    -s <run_folder>/sites.log > <run_folder>/sites.bed 2> <run_folder>/sites.reads
+    mkdir -p <run_folder>
+    bowtie2 -p 16 --score-min=C,-15,0 --reorder --mm \
+        -q -U ce6_anchors.fastq.gz -x bt2_ce6 |\
+            ./find_circ.py \
+                --genome=ce6.fa \
+                --prefix=ce6_test_ \
+                --name=my_test_sample \
+                --stats=<run_folder>/stats.txt \
+                --reads=<run_folder>/spliced_reads.fa \
+                    > <run_folder>/splice_sites.bed
 ```
-The important ingredients here are a folder in which each chromosome can 
-be found as a separate fasta file (genome/chrI.fa ....), and a prefix for 
-naming the splice junctions ("ce6test"). The rest is about output
--s ce6_test/sites.log will receive statistics of the run, stdout reports
-the encountered junctions, and stderr the reads supporting each junction.
-Note: the read sequence can also be reported as the reverse complement of
-the raw reads sequence.
+The prefix `ce6_test` is arbitrary, and pre-pended to every identified splice 
+junction. You may consider setting it to `tmp` or similar for single samples out of a 
+larger set. Note that `find_circ.py` outputs both, circRNA splice junctions (containing the keyword `CIRCULAR`) linear splice junctions (containing the keyword `LINEAR`). 
+You may want to `grep CIRCULAR <run_folder>/splice_sites.bed > circs_sample1.bed` or similar, to sort out the circRNAs.
 
-If you analyse reads from multiple sources (tissues, samples) in one run,
-you can ask find_circ.py to divvy up the contributions from each sample.
-For this, provide a two-column tab-separated flat file with a read-name 
-prefix to match for and an associated tissue. Note that the matching is 
-performed from top to bottom. so you want to match for "read_from_exp_1" 
-BEFORE "read_from". See samples_example.txt to get an idea. The correspon-
-ding switch is find_circ.py -r samples_examples.txt
+### Running multiple samples ###
+If you intend to analyze multiple samples, it is now strongly advised to
+run them individually through `find_circ.py`, and merge the separate outputs
+later! Use the `find_circ.py --name <sample_name>` flag to assign sample IDs, tissue names, *etc.* to 
+each sample.
 
+Merging should then be done with `merge_bed.py`:
+    
+```
+    ./merge_bed.py sample1.bed sample2.bed [...] > all_
+```
+
+This will deal properly with the various columns: quality scores will be assigned the maximum value of all samples, total read counts will be summed up, `tissue` column will contain a comma-separated list, *etc.*.
 
 ### How to filter the output ###
 
-The first 6 columns of 'sites.bed' are standard BED. The rest hold various 
+The first 6 columns of `splice_sites.bed` are standard BED. The rest hold various 
 quality metrics about the junction. (the 'score' field holds the number of
-distinct reads supporting the junction). Check the header line for a quick 
+reads supporting the junction). Check the header line for a quick 
 overview. It is usually a good idea to demand at least 2 reads supporting 
 the junction, unambiguous breakpoint detection and some sane mapping 
 quality:
     
 To get a reasonable set of circRNA candidates try:
 ```
-    grep circ <run_folder>/sites.bed | grep -v chrM | ./sum.py -2,3 | \
-        ./scorethresh.py -16 1 | ./scorethresh.py -15 2 | \
-        ./scorethresh.py -14 2 | ./scorethresh.py 7 2 | \
-        ./scorethresh.py 8,9 35 | ./scorethresh.py -17 100000 \
+    grep CIRCULAR <run_folder>/splice_sites.bed | \
+        grep -v chrM | \
+        grep UNAMBIGUOUS_BP | grep ANCHOR_UNIQUE | \
+        ./sum.py -2,3 | ./scorethresh.py -21 100000 \
         > <run_folder>/circ_candidates.bed
 ```
-
+This selects the circular splice sites with unambiguous detection of the breakpoint (*i.e.* the nucleotides at which splicing occurred), and unique anchor alignments on both sides of the junction. The last part subtracts start from end coordinates to compute the genomic length, and removes splice sites that are more than 100 kb apart. These are perhaps trans-splicing events, but for sure they are so huge they may mess up any downstream scripts you may want to run on this output.
 
 
 
