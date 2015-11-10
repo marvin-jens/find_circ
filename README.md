@@ -269,14 +269,14 @@ This will deal properly with the various columns: quality scores will be assigne
     Options:
     -h, --help            show this help message and exit
     -a ASIZE, --anchor=ASIZE
-                            anchor size
+                          anchor size
     -q MINQUAL, --minqual=MINQUAL
-                            min avg. qual along both anchors (default=5)
+                          min avg. qual along both anchors (default=5)
     -r REV, --rev=REV     permute read parts or reverse A,B,R,C,N for control
     -R, --reads           instead of unmapped reads from BAM, input is
-                            sites.reads from find_circ.py
+                          sites.reads from find_circ.py
     -F, --fasta           instead of unmapped reads from BAM, input is FASTA
-                            file
+                          file
 ```
 
 ### Command line reference `find_circ.py` ###
@@ -291,46 +291,46 @@ This will deal properly with the various columns: quality scores will be assigne
     -h, --help            show this help message and exit
     -v, --version         get version information
     -S SYSTEM, --system=SYSTEM
-                            model system database (optional! Requires byo
-                            library.)
+                          model system database (optional! Requires byo
+                          library.)
     -G GENOME, --genome=GENOME
-                            path to genome (either a folder with chr*.fa or one
-                            multichromosome FASTA file)
+                          path to genome (either a folder with chr*.fa or one
+                          multichromosome FASTA file)
     -n NAME, --name=NAME  tissue/sample name to use (default='unknown')
     -p PREFIX, --prefix=PREFIX
-                            prefix to prepend to each junction name (default='')
+                          prefix to prepend to each junction name (default='')
     -q MIN_UNIQ_QUAL, --min_uniq_qual=MIN_UNIQ_QUAL
-                            minimal uniqness for anchor alignments (default=2)
+                          minimal uniqness for anchor alignments (default=2)
     -a ASIZE, --anchor=ASIZE
-                            anchor size (default=20)
+                          anchor size (default=20)
     -m MARGIN, --margin=MARGIN
-                            maximum nts the BP is allowed to reside inside an
-                            anchor (default=2)
+                          maximum nts the BP is allowed to reside inside an
+                          anchor (default=2)
     -d MAXDIST, --maxdist=MAXDIST
-                            maximum mismatches (no indels) allowed in anchor
-                            extensions (default=2)
+                          maximum mismatches (no indels) allowed in anchor
+                          extensions (default=2)
     --noncanonical        relax the GU/AG constraint (will produce many more
-                            ambiguous counts)
+                          ambiguous counts)
     --randomize           select randomly from tied, best, ambiguous hits
     --allhits             in case of ambiguities, report each hit
     --stranded            use if the reads are stranded. By default it will be
-                            used as control only, use with --strandpref for
-                            breakpoint disambiguation.
+                          used as control only, use with --strandpref for
+                          breakpoint disambiguation.
     --strandpref          prefer splice sites that match annotated direction of
-                            transcription
+                          transcription
     --halfunique          also report junctions where only one anchor aligns
-                            uniquely (less likely to be true)
+                          uniquely (less likely to be true)
     --report_nobridges    also report junctions lacking at least a single read
-                            where both anchors, jointly align uniquely (not
-                            recommended. Much less likely to be true.)
+                          where both anchors, jointly align uniquely (not
+                          recommended. Much less likely to be true.)
     -R READS, --reads=READS
-                            write spliced reads to this file instead of stderr
-                            (RECOMMENDED!)
+                          write spliced reads to this file instead of stderr
+                          (RECOMMENDED!)
     -B BAM, --bam=BAM     filename to store anchor alignments that were recorded
-                            as linear or circular junction candidates
+                          as linear or circular junction candidates
     -r READS2SAMPLES, --reads2samples=READS2SAMPLES
-                            path to tab-separated two-column file with read-name
-                            prefix -> sample ID mapping
+                          path to tab-separated two-column file with read-name
+                          prefix -> sample ID mapping
     -s STATS, --stats=STATS
-                            write numeric statistics on the run to this file
+                          write numeric statistics on the run to this file
 ```
