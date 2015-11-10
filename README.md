@@ -162,7 +162,7 @@ head-to-tail (circular) splicing:
                 --reads=<run_folder>/spliced_reads.fa \
                     > <run_folder>/splice_sites.bed
 ```
-The prefix `ce6_test` is arbitrary, and pre-pended to every identified splice 
+The prefix `ce6_test_` is arbitrary, and pre-pended to every identified splice 
 junction. You may consider setting it to `tmp` or similar for single samples out of a 
 larger set. Note that `find_circ.py` outputs both, circRNA splice junctions (containing the keyword `CIRCULAR`) linear splice junctions (containing the keyword `LINEAR`). 
 You may want to `grep CIRCULAR <run_folder>/splice_sites.bed > circs_sample1.bed` or similar, to sort out the circRNAs.
@@ -254,7 +254,7 @@ Merging should then be done with `merge_bed.py`:
     ./merge_bed.py sample1.bed sample2.bed [...] > combined.bed
 ```
 
-This will deal properly with the various columns: quality scores will be assigned the maximum value of all samples, total read counts will be summed up, `tissue` column will contain a comma-separated list, *etc.*.
+This will deal properly with the various columns: quality scores will be assigned the maximum value of all samples, total read counts will be summed up, `tissues` column will contain a comma-separated list, *etc.*.
 
 ### Command line reference `unmapped2anchors.py` ###
 ```
