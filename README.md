@@ -196,14 +196,89 @@ To get a reasonable set of circRNA candidates try:
     grep CIRCULAR <run_folder>/splice_sites.bed | \
         grep -v chrM | \
         grep UNAMBIGUOUS_BP | grep ANCHOR_UNIQUE | \
-        ./sum.py -2,3 | ./scorethresh.py -21 100000 \
+        ./maxlength.py 100000 \
         > <run_folder>/circ_candidates.bed
 ```
-This selects the circular splice sites with unambiguous detection of the breakpoint (*i.e.* the nucleotides at which splicing occurred), and unique anchor alignments on both sides of the junction. The last part subtracts start from end coordinates to compute the genomic length, and removes splice sites that are more than 100 kb apart. These are perhaps trans-splicing events, but for sure they are so huge they may mess up any downstream scripts you may want to run on this output.
+This selects the circular splice sites with unambiguous detection of the breakpoint (*i.e.* the exact nucleotides at which splicing occurred), and unique anchor alignments on both sides of the junction. The last part subtracts start from end coordinates to compute the genomic length, and removes splice sites that are more than 100 kb apart. These are perhaps trans-splicing events, but for sure they are so huge they can seriously slow down any downstream scripts you may want to run on this output.
+
+The following list of keywords is assigned to splice sites by `find_circ.py` for easy filtering:
+    
+| keyword           | description |
+|-------------------|-------------|
+| LINEAR            | linear (mRNA) splice site, joining consecutive exons |
+| CIRCULAR          | potential circRNA splice site. Exons are joint in reverse order. |
+| UNAMBIGUOUS_BP    | demanding flanking GT/GA, only one way of splitting the spliced |
+|                   | read was found (only one possible breakpoint within the read) |
+| PERFECT_EXT       | The read sequence between the anchors aligned perfectly during the |
+|                   | extension process. |
+| GOOD_EXT          | The extension (see above) required not more than one mismatch or one |
+|                   | nucleotide overlap with an anchor |
+| OK_EXT            | The extension (see above) required not more than two mismatches or two |
+|                   | nucleotides overlap with an anchor |
+| ANCHOR_UNIQUE     | Unique anchor alignments have been found, supporting both sides |
+|                   | of the junction. Unless `--halfunique` is used, this should be  |
+|                   | true for all reported results. |
+| CANONICAL         | splice sites are flanked by GT/AG. Unless `--noncanonical` is |
+|                   | used, this should be true for all reported results. |
+| NO_UNIQ_BRIDGES   | While both sides of the junction are individually supported by |
+|                   | unique anchor alignments, there is not a single read, where both |
+|                   | anchors align uniquely at the same time (bridging the junction). |
+|                   | Unless `--report_nobridge` is used, this should never appear. |
+| STRANDMATCH       | Only appears when `--stranded` is used and GT/AG were found in the |
+|                   | correct orientation |
 
 
+### command line reference ###
+```
+    Usage: 
+
+    bowtie2 [mapping options] anchors.fastq.gz | find_circ.py [options] > candidates.bed
 
 
-
-
-
+    Options:
+    -h, --help            show this help message and exit
+    -v, --version         get version information
+    -S SYSTEM, --system=SYSTEM
+                            model system database (optional! Requires byo
+                            library.)
+    -G GENOME, --genome=GENOME
+                            path to genome (either a folder with chr*.fa or one
+                            multichromosome FASTA file)
+    -n NAME, --name=NAME  tissue/sample name to use (default='unknown')
+    -p PREFIX, --prefix=PREFIX
+                            prefix to prepend to each junction name (default='')
+    -q MIN_UNIQ_QUAL, --min_uniq_qual=MIN_UNIQ_QUAL
+                            minimal uniqness for anchor alignments (default=2)
+    -a ASIZE, --anchor=ASIZE
+                            anchor size (default=20)
+    -m MARGIN, --margin=MARGIN
+                            maximum nts the BP is allowed to reside inside an
+                            anchor (default=2)
+    -d MAXDIST, --maxdist=MAXDIST
+                            maximum mismatches (no indels) allowed in anchor
+                            extensions (default=2)
+    --noncanonical        relax the GU/AG constraint (will produce many more
+                            ambiguous counts)
+    --randomize           select randomly from tied, best, ambiguous hits
+    --allhits             in case of ambiguities, report each hit
+    --stranded            use if the reads are stranded. By default it will be
+                            used as control only, use with --strandpref for
+                            breakpoint disambiguation.
+    --strandpref          prefer splice sites that match annotated direction of
+                            transcription
+    --halfunique          also report junctions where only one anchor aligns
+                            uniquely (less likely to be true)
+    --report_nobridges    also report junctions lacking at least a single read
+                            where both anchors, jointly align uniquely (not
+                            recommended. Much less likely to be true.)
+    -R READS, --reads=READS
+                            write spliced reads to this file instead of stderr
+                            (RECOMMENDED!)
+    -B BAM, --bam=BAM     filename to store anchor alignments that were recorded
+                            as linear or circular junction candidates
+    -r READS2SAMPLES, --reads2samples=READS2SAMPLES
+                            path to tab-separated two-column file with read-name
+                            prefix -> sample ID mapping
+    -s STATS, --stats=STATS
+                            write numeric statistics on the run to this file
+```

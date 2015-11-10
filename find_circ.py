@@ -354,33 +354,32 @@ class GenomeAccessor(Accessor):
 
 usage = """
 
-  bowtie2 anchors.qfa.gz | %prog > candidates.bed
-
+   bowtie2 [mapping options] anchors.fastq.gz | %prog [options] > candidates.bed
 """
 
 parser = optparse.OptionParser(usage=usage)
-parser.add_option("-S","--system",dest="system",type=str,default="",help="model system database")
-parser.add_option("-G","--genome",dest="genome",type=str,default="",help="path to genome (either a folder with chr*.fa or one multichromosome fasta file)")
 parser.add_option("-v","--version",dest="version",action="store_true",default=False,help="get version information")
-parser.add_option("-a","--anchor",dest="asize",type=int,default=20,help="anchor size")
-parser.add_option("-w","--wiggle",dest="wiggle",type=int,default=2,help="maximum nts a linear splice site may be away from circ to be counted as competitor (default=2)")
+parser.add_option("-S","--system",dest="system",type=str,default="",help="model system database (optional! Requires byo library.)")
+parser.add_option("-G","--genome",dest="genome",type=str,default="",help="path to genome (either a folder with chr*.fa or one multichromosome FASTA file)")
+parser.add_option("-n","--name",dest="name",default="unknown",help="tissue/sample name to use (default='unknown')")
+parser.add_option("-p","--prefix",dest="prefix",default="",help="prefix to prepend to each junction name (default='')")
+parser.add_option("-q","--min_uniq_qual",dest="min_uniq_qual",type=int,default=2,help="minimal uniqness for anchor alignments (default=2)")
+parser.add_option("-a","--anchor",dest="asize",type=int,default=20,help="anchor size (default=20)")
 parser.add_option("-m","--margin",dest="margin",type=int,default=2,help="maximum nts the BP is allowed to reside inside an anchor (default=2)")
 parser.add_option("-d","--maxdist",dest="maxdist",type=int,default=2,help="maximum mismatches (no indels) allowed in anchor extensions (default=2)")
-parser.add_option("-p","--prefix",dest="prefix",default="",help="prefix to prepend to each name")
-parser.add_option("-B","--bam",dest="bam",default="",help="filename to store anchor alignments that were recorded as linear or circular junction candidates")
-parser.add_option("-n","--name",dest="name",default="unknown",help="tissue/sample name to use for unknown read-name patterns (default='unknown')")
-parser.add_option("-q","--min_uniq_qual",dest="min_uniq_qual",type=int,default=2,help="minimal uniqness for anchor alignments (default=2)")
-parser.add_option("","--halfunique",dest="halfunique",default=False,action="store_true",help="also report junctions where only one anchor aligns uniquely (less likely to be true)")
-parser.add_option("","--report_nobridges",dest="report_nobridges",default=False,action="store_true",help="also report junctions lacking at least a single read where both anchors, jointly align uniquely (not recommended. Much less likely to be true.)")
-parser.add_option("","--stranded",dest="stranded",default=False,action="store_true",help="use if the reads are stranded. By default it will be used as control only, use with --strandpref for breakpoint disambiguation.")
-parser.add_option("-s","--stats",dest="stats",default="runstats.log",help="where to put stats")
+
 parser.add_option("","--noncanonical",dest="noncanonical",default=False,action="store_true",help="relax the GU/AG constraint (will produce many more ambiguous counts)")
 parser.add_option("","--randomize",dest="randomize",default=False,action="store_true",help="select randomly from tied, best, ambiguous hits")
 parser.add_option("","--allhits",dest="allhits",default=False,action="store_true",help="in case of ambiguities, report each hit")
+parser.add_option("","--stranded",dest="stranded",default=False,action="store_true",help="use if the reads are stranded. By default it will be used as control only, use with --strandpref for breakpoint disambiguation.")
 parser.add_option("","--strandpref",dest="strandpref",default=False,action="store_true",help="prefer splice sites that match annotated direction of transcription")
-parser.add_option("-r","--reads2samples",dest="reads2samples",default="",help="path to tab-separated two-column file with read-name prefix -> sample ID mapping")
-parser.add_option("-R","--reads",dest="reads",default="",help="write spliced reads to this file instead of stderr")
+parser.add_option("","--halfunique",dest="halfunique",default=False,action="store_true",help="also report junctions where only one anchor aligns uniquely (less likely to be true)")
+parser.add_option("","--report_nobridges",dest="report_nobridges",default=False,action="store_true",help="also report junctions lacking at least a single read where both anchors, jointly align uniquely (not recommended. Much less likely to be true.)")
 
+parser.add_option("-R","--reads",dest="reads",default="",help="write spliced reads to this file instead of stderr (RECOMMENDED!)")
+parser.add_option("-B","--bam",dest="bam",default="",help="filename to store anchor alignments that were recorded as linear or circular junction candidates")
+parser.add_option("-r","--reads2samples",dest="reads2samples",default="",help="path to tab-separated two-column file with read-name prefix -> sample ID mapping")
+parser.add_option("-s","--stats",dest="stats",default="runstats.log",help="write numeric statistics on the run to this file")
 options,args = parser.parse_args()
 
 if options.version:
@@ -500,26 +499,10 @@ class Hit(object):
         best_qual_A = sorted(self.mapquals_A,reverse=True)[0]
         best_qual_B = sorted(self.mapquals_B,reverse=True)[0]
 
-        wiggle = numpy.arange(-options.wiggle,options.wiggle+1)   
-        
-        spliced_at_begin = 0
-        for x in wiggle:
-            begin = (chrom,start+x,sense)
-            if begin in loci:
-                for l in loci[begin]:
-                    spliced_at_begin += len(l.reads)
-
-        spliced_at_end = 0
-        for x in wiggle:
-            ending = (chrom,end+x,sense)
-            if end in loci:
-                for l in loci[ending]:
-                    spliced_at_end += len(l.reads)
-
         #print self.edits,self.overlaps,self.n_hits
         tissues = sorted(self.tissues.keys())
         tiss_counts = [str(self.tissues[k]) for k in tissues]
-        return (n_reads,n_uniq,best_qual_A,best_qual_B,self.uniq_bridges,spliced_at_begin,spliced_at_end,tissues,tiss_counts,min(self.edits),min(self.overlaps),min(self.n_hits),self.signal,self.strandmatch)
+        return (n_reads,n_uniq,best_qual_A,best_qual_B,self.uniq_bridges,tissues,tiss_counts,min(self.edits),min(self.overlaps),min(self.n_hits),self.signal,self.strandmatch)
                 
         
 loci = defaultdict(list)
@@ -727,12 +710,12 @@ except:
     sys.exit(1)
 
 def output(cand,prefix):
-    print "#","\t".join(['chrom','start','end','name','n_reads','strand','n_uniq','uniq_bridges','best_qual_left','best_qual_right','spliced_at_begin','spliced_at_end','tissues','tiss_counts','edits','anchor_overlap','breakpoints','signal','strandmatch','category'])
+    print "#","\t".join(['chrom','start','end','name','n_reads','strand','n_uniq','uniq_bridges','best_qual_left','best_qual_right','tissues','tiss_counts','edits','anchor_overlap','breakpoints','signal','strandmatch','category'])
     n = 1
     for c,hit in cand.items():
         #print c
         chrom,start,end,sense = c
-        n_reads,n_uniq,best_qual_A,best_qual_B,uniq_bridges,spliced_at_begin,spliced_at_end,tissues,tiss_counts,min_edit,min_anchor_ov,n_hits,signal,strandmatch = hit.scores(chrom,start,end,sense)
+        n_reads,n_uniq,best_qual_A,best_qual_B,uniq_bridges,tissues,tiss_counts,min_edit,min_anchor_ov,n_hits,signal,strandmatch = hit.scores(chrom,start,end,sense)
         
         if options.halfunique:
             if (best_qual_A < options.min_uniq_qual) and (best_qual_B < options.min_uniq_qual):
@@ -767,9 +750,9 @@ def output(cand,prefix):
         if min_anchor_ov == 0 and min_edit == 0: 
             categories.append("PERFECT_EXT")
         elif min_anchor_ov <= 1 and min_edit <= 1:
-            categories.append("GOOD")
+            categories.append("GOOD_EXT")
         elif min_anchor_ov <= 2 and min_edit <= 2:
-            categories.append("OK")
+            categories.append("OK_EXT")
 
         if not categories:
             categories.append("DUBIOUS")
@@ -780,7 +763,7 @@ def output(cand,prefix):
             categories.append("LINEAR")
 
 
-        bed = [chrom,start-1,end,name,n_reads,sense,n_uniq,uniq_bridges,best_qual_A,best_qual_B,spliced_at_begin,spliced_at_end,",".join(tissues),",".join(tiss_counts),min_edit,min_anchor_ov,n_hits,signal,strandmatch,",".join(sorted(categories))]
+        bed = [chrom,start-1,end,name,n_reads,sense,n_uniq,uniq_bridges,best_qual_A,best_qual_B,",".join(tissues),",".join(tiss_counts),min_edit,min_anchor_ov,n_hits,signal,strandmatch,",".join(sorted(categories))]
         print "\t".join([str(b) for b in bed])
 
 stats = file(options.stats,"w")
