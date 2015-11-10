@@ -254,7 +254,7 @@ Merging should then be done with `merge_bed.py`:
     ./merge_bed.py sample1.bed sample2.bed [...] > combined.bed
 ```
 
-This will deal properly with the various columns: quality scores will be assigned the maximum value of all samples, total read counts will be summed up, `tissue` column will contain a comma-separated list, *etc.*.
+This will deal properly with the various columns: quality scores will be assigned the maximum value of all samples, total read counts will be summed up, `tissues` column will contain a comma-separated list, *etc.*.
 
 ### Command line reference `unmapped2anchors.py` ###
 ```
