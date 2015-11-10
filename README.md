@@ -30,13 +30,19 @@ this software unless you have found a bug, wish to provide improvements
 to the code, propose a collaboration, or use our code for commercial 
 purposes. Thank you very much for your understanding!
 
+### License ###
+
+For non-commercial purposes the code is released under the General Public 
+License (version 3). See the file LICENSE for more detail. If you are
+interested in commercial use of this software contact the authors.
+
 ### Brief version history ###
 
 The current code (v1.2) has some small bug fixes and improvements. 
 Each version deemed stable is tagged and a brief summary of the improvements 
 is given here:
     
-  - **v1** : as used in [Memczak *et al.* 2013](http://www.ncbi.nlm.nih.gov/pubmed/23446348))
+  - **v1** : as used in [Memczak *et al.* 2013](http://www.ncbi.nlm.nih.gov/pubmed/23446348)
   - **v1.2** : 
     - fix the uniqueness handling. Occasionally reads would have 
       either anchor align uniquely, but never both. These rare cases now get 
@@ -53,13 +59,6 @@ is given here:
       
   - **v2** : (*under development*): produce multiple anchor lengths to potentially 
 yield more junctions with unique anchor mappings.
-
-### License ###
-
-For non-commercial purposes the code is released under the General Public 
-License (version 3). See the file LICENSE for more detail. If you are
-interested in commercial use of this software contact the authors.
-
 
 ### Prerequisites ###
 
@@ -168,38 +167,36 @@ junction. You may consider setting it to `tmp` or similar for single samples out
 larger set. Note that `find_circ.py` outputs both, circRNA splice junctions (containing the keyword `CIRCULAR`) linear splice junctions (containing the keyword `LINEAR`). 
 You may want to `grep CIRCULAR <run_folder>/splice_sites.bed > circs_sample1.bed` or similar, to sort out the circRNAs.
 
-### Running multiple samples ###
-If you intend to analyze multiple samples, it is now strongly advised to
-run them individually through `find_circ.py`, and merge the separate outputs
-later! Use the `find_circ.py --name <sample_name>` flag to assign sample IDs, tissue names, *etc.* to 
-each sample.
 
-Merging should then be done with `merge_bed.py`:
-    
-```
-    ./merge_bed.py sample1.bed sample2.bed [...] > all_
-```
+   
+### Output format ###
 
-This will deal properly with the various columns: quality scores will be assigned the maximum value of all samples, total read counts will be summed up, `tissue` column will contain a comma-separated list, *etc.*.
+The detected linear and circular candidate splice sites are printed to stdout. The first 6 columns are standard BED. The rest hold various 
+quality metrics about the junction. Here is an overview:
 
-### How to filter the output ###
-
-The first 6 columns of `splice_sites.bed` are standard BED. The rest hold various 
-quality metrics about the junction. (the 'score' field holds the number of
-reads supporting the junction). Check the header line for a quick 
-overview. It is usually a good idea to demand at least 2 reads supporting 
-the junction, unambiguous breakpoint detection and some sane mapping 
-quality:
-    
-To get a reasonable set of circRNA candidates try:
-```
-    grep CIRCULAR <run_folder>/splice_sites.bed | \
-        grep -v chrM | \
-        grep UNAMBIGUOUS_BP | grep ANCHOR_UNIQUE | \
-        ./maxlength.py 100000 \
-        > <run_folder>/circ_candidates.bed
-```
-This selects the circular splice sites with unambiguous detection of the breakpoint (*i.e.* the exact nucleotides at which splicing occurred), and unique anchor alignments on both sides of the junction. The last part subtracts start from end coordinates to compute the genomic length, and removes splice sites that are more than 100 kb apart. These are perhaps trans-splicing events, but for sure they are so huge they can seriously slow down any downstream scripts you may want to run on this output.
+| column | name | description |
+|--------|------|-------------|
+| 1  | chrom | chromosome/contig name |
+| 2  | start | left splice site (zero-based) |
+| 3  | end | right splice site (zero-based). |
+|    |     | (Always: end > start. 5' 3' depends on strand) |
+| 4  | name | (provisional) running number/name assigned to junction |
+| 5  | n_reads | number of reads supporting the junction (BED 'score') |
+| 6  | strand | genomic strand (+ or -) |
+| 7  | n_uniq | number of *distinct* read sequences supporting the junction |
+| 8  | uniq_bridges | number of reads with both anchors aligning uniquely |
+| 9  | best_qual_left | alignment score margin of the best anchor alignment |
+|    |                | supporting the left splice junction (`max=2 * anchor_length`) |
+| 10 | best_qual_right | same for the right splice site |
+| 11 | tissues | comma-separated, alphabetically sorted list of |
+|    |           | tissues/samples with this junction |
+| 12 |tiss_counts |  comma-separated list of corresponding read-counts |
+| 13 | edits | number of mismatches in the anchor extension process |
+| 14 | anchor_overlap | number of nucleotides the breakpoint resides within one anchor |
+| 15 | breakpoints | number of alternative ways to break the read with flanking GT/AG | 
+| 16 | signal | flanking dinucleotide splice signal (normally GT/AG) |
+| 17 | strandmatch | 'MATCH', 'MISMATCH' or 'NA' for non-stranded analysis |
+| 18 | category | list of keywords describing the junction. Useful for quick `grep` filtering |
 
 The following list of keywords is assigned to splice sites by `find_circ.py` for easy filtering:
     
@@ -228,7 +225,38 @@ The following list of keywords is assigned to splice sites by `find_circ.py` for
 |                   | correct orientation |
 
 
-### command line reference ###
+### How to filter the output ###
+
+It is usually a good idea to demand at least 2 reads supporting 
+the junction, unambiguous breakpoint detection and some sane mapping 
+quality:
+    
+To get a reasonable set of circRNA candidates try:
+```
+    grep CIRCULAR <run_folder>/splice_sites.bed | \
+        grep -v chrM | \
+        grep UNAMBIGUOUS_BP | grep ANCHOR_UNIQUE | \
+        ./maxlength.py 100000 \
+        > <run_folder>/circ_candidates.bed
+```
+This selects the circular splice sites with unambiguous detection of the breakpoint (*i.e.* the exact nucleotides at which splicing occurred), and unique anchor alignments on both sides of the junction. The last part subtracts start from end coordinates to compute the genomic length, and removes splice sites that are more than 100 kb apart. These are perhaps trans-splicing events, but for sure they are so huge they can seriously slow down any downstream scripts you may want to run on this output.
+
+### Analyzing multiple samples ###
+
+If you intend to analyze multiple samples, it is now strongly advised to
+run them individually through `find_circ.py`, and merge the separate outputs
+later! Use the `find_circ.py --name <sample_name>` flag to assign sample IDs, tissue names, *etc.* to 
+each sample.
+
+Merging should then be done with `merge_bed.py`:
+    
+```
+    ./merge_bed.py sample1.bed sample2.bed [...] > combined.bed
+```
+
+This will deal properly with the various columns: quality scores will be assigned the maximum value of all samples, total read counts will be summed up, `tissue` column will contain a comma-separated list, *etc.*.
+
+### Command line reference ###
 ```
     Usage: 
 
