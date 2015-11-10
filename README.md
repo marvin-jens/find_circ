@@ -256,7 +256,31 @@ Merging should then be done with `merge_bed.py`:
 
 This will deal properly with the various columns: quality scores will be assigned the maximum value of all samples, total read counts will be summed up, `tissue` column will contain a comma-separated list, *etc.*.
 
-### Command line reference ###
+### Command line reference `unmapped2anchors.py` ###
+```
+    ./unmapped2anchors.py -h
+    Usage: 
+
+    unmapped2anchors.py <alignments.bam> > unmapped_anchors.qfa
+
+    Extract anchor sequences from unmapped reads. Optionally permute.
+
+
+    Options:
+    -h, --help            show this help message and exit
+    -a ASIZE, --anchor=ASIZE
+                            anchor size
+    -q MINQUAL, --minqual=MINQUAL
+                            min avg. qual along both anchors (default=5)
+    -r REV, --rev=REV     P-ermute read parts or reverse A,B,R,C,N for control
+    -R, --reads           instead of unmapped reads from BAM, input is
+                            sites.reads from find_circ.py
+    -F, --fasta           instead of unmapped reads from BAM, input is FASTA
+                            file
+```
+
+### Command line reference `find_circ.py` ###
+
 ```
     Usage: 
 
