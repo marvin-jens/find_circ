@@ -272,7 +272,7 @@ This will deal properly with the various columns: quality scores will be assigne
                             anchor size
     -q MINQUAL, --minqual=MINQUAL
                             min avg. qual along both anchors (default=5)
-    -r REV, --rev=REV     P-ermute read parts or reverse A,B,R,C,N for control
+    -r REV, --rev=REV     permute read parts or reverse A,B,R,C,N for control
     -R, --reads           instead of unmapped reads from BAM, input is
                             sites.reads from find_circ.py
     -F, --fasta           instead of unmapped reads from BAM, input is FASTA

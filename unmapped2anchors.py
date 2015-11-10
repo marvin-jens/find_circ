@@ -54,7 +54,7 @@ Extract anchor sequences from unmapped reads. Optionally permute.
 parser = OptionParser(usage=usage)
 parser.add_option("-a","--anchor",dest="asize",type=int,default=20,help="anchor size")
 parser.add_option("-q","--minqual",dest="minqual",type=int,default=5,help="min avg. qual along both anchors (default=5)")
-parser.add_option("-r","--rev",dest="rev",type="choice",choices=["A","B","R","N","C","P"],default="N",help="P-ermute read parts or reverse A,B,R,C,N for control")
+parser.add_option("-r","--rev",dest="rev",type="choice",choices=["A","B","R","N","C","P"],default="N",help="permute read parts or reverse A,B,R,C,N for control")
 parser.add_option("-R","--reads",dest="reads",action="store_true",default=False,help="instead of unmapped reads from BAM, input is sites.reads from find_circ.py")
 parser.add_option("-F","--fasta",dest="fasta",action="store_true",default=False,help="instead of unmapped reads from BAM, input is FASTA file")
 
