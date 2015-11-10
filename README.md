@@ -334,3 +334,23 @@ This will deal properly with the various columns: quality scores will be assigne
     -s STATS, --stats=STATS
                           write numeric statistics on the run to this file
 ```
+
+### Command line reference `merge_bed.py` ###
+
+```
+    Usage:
+
+    merge_bed.py 1.bed 2.bed [3.bed] [4.bed] [...] > merged.bed
+
+    Merge BED or BED-like files on the genomic coordinates. Deals properly
+    with find_circ.py output and adds a few extra columns.
+
+
+    Options:
+      -h, --help            show this help message and exit
+      -f FLANK, --flank=FLANK
+                            add flanking nucleotides to define more fuzzy overlap
+                            (default=0)
+      -s STATS, --stats=STATS
+                            write statistics to this file (instead of stderr)
+```
