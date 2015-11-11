@@ -368,6 +368,8 @@ parser.add_option("-a","--anchor",dest="asize",type=int,default=20,help="anchor 
 parser.add_option("-m","--margin",dest="margin",type=int,default=2,help="maximum nts the BP is allowed to reside inside an anchor (default=2)")
 parser.add_option("-d","--maxdist",dest="maxdist",type=int,default=2,help="maximum mismatches (no indels) allowed in anchor extensions (default=2)")
 
+parser.add_option("","--bwa-mem",dest="bwa_mem",default=False,action="store_true",help="Input is alignments of full length reads from BWA MEM, not BOWTIE2 anchor alignments from split reads [EXPERIMENTAL]")
+
 parser.add_option("","--noncanonical",dest="noncanonical",default=False,action="store_true",help="relax the GU/AG constraint (will produce many more ambiguous counts)")
 parser.add_option("","--randomize",dest="randomize",default=False,action="store_true",help="select randomly from tied, best, ambiguous hits")
 parser.add_option("","--allhits",dest="allhits",default=False,action="store_true",help="in case of ambiguities, report each hit")
@@ -535,23 +537,30 @@ def find_breakpoints(A,B,read,chrom,margin=options.margin,maxdist=options.maxdis
 
     L = len(read)
     hits = []
-    #print "readlen",L
-    #print " "*2+read
-    eff_a = options.asize-margin
-    internal = read[eff_a:-eff_a].upper()
+    print "readlen",L
+    print " "*2+read
+    eff_a = (A.aend-A.pos)-margin
+    eff_b = (B.aend-B.pos)-margin
+    #print " "*2+A.query[:-margin]
+    #print " "*(2+L-eff_b)+B.query[margin:]
+    print " "*2+A.query[:-margin]
+    print " "*(2+L-eff_b)+B.query[margin:]
+
+    
+    internal = read[eff_a:-eff_b].upper()
         
-    flank = L - 2*eff_a + 2
+    flank = L - (eff_a+eff_b) + 2
 
     A_flank = genome.get(chrom,A.aend-margin,A.aend-margin + flank,'+').upper()
     B_flank = genome.get(chrom,B.pos - flank+margin,B.pos+margin,'+').upper()
 
-    l = L - 2*eff_a
+    l = L - (eff_a+eff_b)
     for x in range(l+1):
         spliced = A_flank[:x] + B_flank[x+2:]
         dist = mismatches(spliced,internal)        
         
-        #bla = A_flank[:x].lower() + B_flank[x+2:]
-        #print " "*(eff_a+2)+bla,dist
+        bla = A_flank[:x].lower() + B_flank[x+2:]
+        print " "*(eff_a+2)+bla,dist
 
         ov = 0
         if x < margin:
@@ -587,6 +596,7 @@ def find_breakpoints(A,B,read,chrom,margin=options.margin,maxdist=options.maxdis
                 elif gtag == 'CTAC':
                     hits.append((dist,ov,strandmatch(strand,'-'),rnd(),chrom,start,end,'GTAG','-'))
 
+    print hits
     if len(hits) < 2:
         # unambiguous, return right away
         return hits
@@ -611,103 +621,246 @@ if options.bam:
 else:
     bam_out = None
 
-try:
+def anchors_bowtie2(sam):      
     for pair_num,(A,B) in enumerate(grouper(2,sam)):
-        #print A
-        #print B
-        N['total'] += 1
-        if A.is_unmapped or B.is_unmapped:
-            N['unmapped'] += 1
-            continue
-        if A.tid != B.tid:
-            N['other_chrom'] += 1
-            continue
-        if A.is_reverse != B.is_reverse:
-            N['other_strand'] += 1
-            continue
+        yield A,B,pair_num * 2
+    
+    
+def prep_bwa_mem(alignments):
+    """
+    Input is the list of primary alignments as reported by BWA MEM.
+    In the simplest case these are two alignments to two exons, with 
+    the respective parts belonging to the other exon clipped.
+    """
+    A,B = alignments
+    print A.cigar
+    print B.cigar
+    
+    def trim_clipped(read):
+        start = read.pos
+        end = read.aend
+        seq = read.query
+        print read.query, read.seq
 
-        dist = B.pos - A.pos
-        if numpy.abs(dist) < options.asize:
-            N['overlapping_anchors'] += 1
-            continue
+    trim_clipped(A)
+    trim_clipped(B)
+    
+
+def anchors_bwa_mem(sam):
+    last_qname = ""
+    alignments = []
+               
+    for line_num,read in enumerate(sam):
+        #print read
+        if read.qname != last_qname:
+            if len(alignments) == 2:
+                A,B = alignments
+                yield A,B,line_num
+            alignments = []
+
+        alignments.append(read)
+        last_qname = read.qname
         
-        ### anchor pairs that make it up to here are interesting
-        if bam_out:
-            bam_out.write(A)
-            bam_out.write(B)
+if options.bwa_mem:
+    try:
+        for A,B,sam_line in anchors_bwa_mem(sam):
+            print A
+            print B
+            N['total'] += 1
+            if A.is_unmapped or B.is_unmapped:
+                N['unmapped'] += 1
+                continue
+            if A.tid != B.tid:
+                N['other_chrom'] += 1
+                continue
+            if A.is_reverse != B.is_reverse:
+                N['other_strand'] += 1
+                continue
 
-        #debug("A='%s' B='%s' dist=%d A.is_reverse=%s" % (A,B,dist,A.is_reverse))
-        if (A.is_reverse and dist > 0) or (not A.is_reverse and dist < 0):
-            # the anchors align in reversed orientation -> circRNA?
+            dist = B.pos - A.pos
+            if numpy.abs(dist) < options.asize:
+                N['overlapping_anchors'] += 1
+                continue
             
-            read = A.qname.split('__')[1]
-            chrom = sam.getrname(A.tid)
-            
-            if A.is_reverse:
-                #print "ISREVERSE"
-                A,B = B,A
-                read = rev_comp(read)
-                            
-            bp = find_breakpoints(A,B,read,chrom)
-            if not bp:
-                N['circ_no_bp'] += 1
-            else:
-                N['circ_reads'] += 1
+            ### anchor pairs that make it up to here are interesting
+            if bam_out:
+                bam_out.write(A)
+                bam_out.write(B)
 
-            n_hits = len(bp)
-            if bp and not options.allhits:
-                bp = [bp[0],]
-
-            for h in bp:
-                # for some weird reason for circ we need a correction here
-                dist,ov,strandmatch,rnd,chrom,start,end,signal,sense = h
-                h = (chrom,start+1,end-1,sense)
-                circs[h].add(read,A,B,dist,ov,strandmatch,signal,n_hits)
-
-        elif (A.is_reverse and dist < 0) or (not A.is_reverse and dist > 0):
-            # the anchors align sequentially -> linear/normal splice junction?
-            read = A.qname.split('__')[1]
-            chrom = sam.getrname(A.tid)
-            
-            if A.is_reverse:
-                #print "ISREVERSE"
-                A,B = B,A
-                read = rev_comp(read)
-                            
-            bp = find_breakpoints(A,B,read,chrom)
-            if not bp:
-                N['splice_no_bp'] += 1
-            else:
-                N['spliced_reads'] += 1
-            n_hits = len(bp)
-            if bp and not options.allhits:
-                bp = [bp[0],]
-            
-            for h in bp:
-                #print h
-                dist,ov,strandmatch,rnd,chrom,start,end,signal,sense = h
-                h = (chrom,start,end,sense)
-                splices[h].add(read,A,B,dist,ov,strandmatch,signal,n_hits)
+            #debug("A='%s' B='%s' dist=%d A.is_reverse=%s" % (A,B,dist,A.is_reverse))
+            if (A.is_reverse and dist > 0) or (not A.is_reverse and dist < 0):
+                # the anchors align in reversed orientation -> circRNA?
+                print "potential circ"
+                if options.bwa_mem:
+                    read = A.seq
+                else:
+                    read = A.qname.split('__')[1]
+                chrom = sam.getrname(A.tid)
                 
-                # remember the spliced reads at these sites
-                loci[(chrom,start,sense)].append(splices[h])
-                loci[(chrom,end,sense)].append(splices[h])
-        else:
-            N['fallout'] += 1
-            warning("unhandled read: A='%s' B='%s'" % (A,B))
+                if A.is_reverse:
+                    #print "ISREVERSE"
+                    A,B = B,A
+                    read = rev_comp(read)
+                                
+                bp = find_breakpoints(A,B,read,chrom)
+                if not bp:
+                    N['circ_no_bp'] += 1
+                else:
+                    N['circ_reads'] += 1
+
+                n_hits = len(bp)
+                if bp and not options.allhits:
+                    bp = [bp[0],]
+
+                for h in bp:
+                    # for some weird reason for circ we need a correction here
+                    dist,ov,strandmatch,rnd,chrom,start,end,signal,sense = h
+                    h = (chrom,start+1,end-1,sense)
+                    circs[h].add(read,A,B,dist,ov,strandmatch,signal,n_hits)
+
+            elif (A.is_reverse and dist < 0) or (not A.is_reverse and dist > 0):
+                # the anchors align sequentially -> linear/normal splice junction?
+                if options.bwa_mem:
+                    read = A.seq
+                else:
+                    read = A.qname.split('__')[1]
+                chrom = sam.getrname(A.tid)
+                
+                if A.is_reverse:
+                    #print "ISREVERSE"
+                    A,B = B,A
+                    read = rev_comp(read)
+                                
+                bp = find_breakpoints(A,B,read,chrom)
+                if not bp:
+                    N['splice_no_bp'] += 1
+                else:
+                    N['spliced_reads'] += 1
+                n_hits = len(bp)
+                if bp and not options.allhits:
+                    bp = [bp[0],]
+                
+                for h in bp:
+                    #print h
+                    dist,ov,strandmatch,rnd,chrom,start,end,signal,sense = h
+                    h = (chrom,start,end,sense)
+                    splices[h].add(read,A,B,dist,ov,strandmatch,signal,n_hits)
+                    
+                    # remember the spliced reads at these sites
+                    loci[(chrom,start,sense)].append(splices[h])
+                    loci[(chrom,end,sense)].append(splices[h])
+            else:
+                N['fallout'] += 1
+                warning("unhandled read: A='%s' B='%s'" % (A,B))
+    except KeyboardInterrupt:
+        fastq_line = sam_line * 4
+
+        logging.warning("KeyboardInterrupt by user while processing input starting at SAM line {sam_line}, FASTQ line {fastq_line}".format(**locals()))
+    except:        
+        fastq_line = sam_line * 4
+
+        logging.error("Unhandled exception raised while processing input starting at SAM line {sam_line}, FASTQ line {fastq_line}".format(**locals()))
+        traceback.print_exc(file=sys.stderr)
+        sys.exit(1)
+    
+    
+    
+else:
+    try:
+        for A,B,sam_line in anchors_bowtie2(sam):
+            print A
+            print B
+            N['total'] += 1
+            if A.is_unmapped or B.is_unmapped:
+                N['unmapped'] += 1
+                continue
+            if A.tid != B.tid:
+                N['other_chrom'] += 1
+                continue
+            if A.is_reverse != B.is_reverse:
+                N['other_strand'] += 1
+                continue
+
+            dist = B.pos - A.pos
+            if numpy.abs(dist) < options.asize:
+                N['overlapping_anchors'] += 1
+                continue
             
-except KeyboardInterrupt:
-    sam_line = pair_num * 2
-    fastq_line = pair_num * 8
+            ### anchor pairs that make it up to here are interesting
+            if bam_out:
+                bam_out.write(A)
+                bam_out.write(B)
 
-    logging.warning("KeyboardInterrupt by user while processing alignment pair {pair_num}, on input starting at SAM line {sam_line}, FASTQ line {fastq_line}".format(**locals()))
-except:        
-    sam_line = pair_num * 2
-    fastq_line = pair_num * 8
+            #debug("A='%s' B='%s' dist=%d A.is_reverse=%s" % (A,B,dist,A.is_reverse))
+            if (A.is_reverse and dist > 0) or (not A.is_reverse and dist < 0):
+                # the anchors align in reversed orientation -> circRNA?
+                
+                read = A.qname.split('__')[1]
+                chrom = sam.getrname(A.tid)
+                
+                if A.is_reverse:
+                    #print "ISREVERSE"
+                    A,B = B,A
+                    read = rev_comp(read)
+                                
+                bp = find_breakpoints(A,B,read,chrom)
+                if not bp:
+                    N['circ_no_bp'] += 1
+                else:
+                    N['circ_reads'] += 1
 
-    logging.error("Unhandled exception raised while processing alignment pair {pair_num}, on input starting at SAM line {sam_line}, FASTQ line {fastq_line}".format(**locals()))
-    traceback.print_exc(file=sys.stderr)
-    sys.exit(1)
+                n_hits = len(bp)
+                if bp and not options.allhits:
+                    bp = [bp[0],]
+
+                for h in bp:
+                    # for some weird reason for circ we need a correction here
+                    dist,ov,strandmatch,rnd,chrom,start,end,signal,sense = h
+                    h = (chrom,start+1,end-1,sense)
+                    circs[h].add(read,A,B,dist,ov,strandmatch,signal,n_hits)
+
+            elif (A.is_reverse and dist < 0) or (not A.is_reverse and dist > 0):
+                # the anchors align sequentially -> linear/normal splice junction?
+                read = A.qname.split('__')[1]
+                chrom = sam.getrname(A.tid)
+                
+                if A.is_reverse:
+                    #print "ISREVERSE"
+                    A,B = B,A
+                    read = rev_comp(read)
+                                
+                bp = find_breakpoints(A,B,read,chrom)
+                if not bp:
+                    N['splice_no_bp'] += 1
+                else:
+                    N['spliced_reads'] += 1
+                n_hits = len(bp)
+                if bp and not options.allhits:
+                    bp = [bp[0],]
+                
+                for h in bp:
+                    #print h
+                    dist,ov,strandmatch,rnd,chrom,start,end,signal,sense = h
+                    h = (chrom,start,end,sense)
+                    splices[h].add(read,A,B,dist,ov,strandmatch,signal,n_hits)
+                    
+                    # remember the spliced reads at these sites
+                    loci[(chrom,start,sense)].append(splices[h])
+                    loci[(chrom,end,sense)].append(splices[h])
+            else:
+                N['fallout'] += 1
+                warning("unhandled read: A='%s' B='%s'" % (A,B))
+                
+    except KeyboardInterrupt:
+        fastq_line = sam_line * 4
+
+        logging.warning("KeyboardInterrupt by user while processing input starting at SAM line {sam_line}, FASTQ line {fastq_line}".format(**locals()))
+    except:        
+        fastq_line = sam_line * 4
+
+        logging.error("Unhandled exception raised while processing input starting at SAM line {sam_line}, FASTQ line {fastq_line}".format(**locals()))
+        traceback.print_exc(file=sys.stderr)
+        sys.exit(1)
 
 def output(cand,prefix):
     print "#","\t".join(['chrom','start','end','name','n_reads','strand','n_uniq','uniq_bridges','best_qual_left','best_qual_right','tissues','tiss_counts','edits','anchor_overlap','breakpoints','signal','strandmatch','category'])
