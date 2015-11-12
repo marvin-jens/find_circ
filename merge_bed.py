@@ -15,6 +15,7 @@ with find_circ.py output and adds a few extra columns.
 parser = OptionParser(usage=usage)
 parser.add_option("-f","--flank",dest="flank",type=int,default=0,help="add flanking nucleotides to define more fuzzy overlap (default=0)")
 parser.add_option("-s","--stats",dest="stats",default="",help="write statistics to this file (instead of stderr)")
+parser.add_option("-c","--old-input",dest="old_input",action="store_true",help="switch on compatibility mode for old input format")
 options,args = parser.parse_args()
 
 from numpy import *
@@ -98,20 +99,34 @@ def consensus_line(lines,comb):
 
         return ",".join([str(x) for x in sorted(v) if x])
 
-    col_map = { 
-        3 : lambda values : ",".join(sorted(values)), # combine identifiers
-        4 : lambda values : array(values,dtype=int).sum(), # sum n_reads
-        6 : lambda values : array(values,dtype=int).sum(), # sum n_uniq
-        7 : lambda values : max([int(x) for x in values]), # max of best_uniq_A
-        8 : lambda values : max([int(x) for x in values]), # max of best_uniq_B
-        9 : lambda values : array(values,dtype=int).sum(), # sum ov_linear_A
-        10 : lambda values : array(values,dtype=int).sum(), # sum ov_linear_B
-        11 : setup_samples,
-        12 : assign_counts,
-        13 : lambda values : min([int(x) for x in values]), # min of edits
-        14 : lambda values : min([int(x) for x in values]), # min of anchor_overlap
-        15 : lambda values : min([int(x) for x in values]), # min of breakpoints
-    }
+    if options.old_input:
+        col_map = {
+            3 : lambda values : ",".join(sorted(values)), # combine identifiers
+            4 : lambda values : array(values,dtype=int).sum(), # sum n_reads
+            6 : lambda values : array(values,dtype=int).sum(), # sum n_uniq
+            7 : lambda values : max([int(x) for x in values]), # max of best_uniq_A
+            8 : lambda values : max([int(x) for x in values]), # max of best_uniq_B
+            9 : lambda values : array(values,dtype=int).sum(), # sum ov_linear_A
+            10 : lambda values : array(values,dtype=int).sum(), # sum ov_linear_B
+            11 : setup_samples,
+            12 : assign_counts,
+            13 : lambda values : min([int(x) for x in values]), # min of edits
+            14 : lambda values : min([int(x) for x in values]), # min of anchor_overlap
+            15 : lambda values : min([int(x) for x in values]), # min of breakpoints
+        }
+    else:
+        col_map = {
+            3 : lambda values : ",".join(sorted(values)), # combine identifiers
+            4 : lambda values : array(values,dtype=int).sum(), # sum n_reads
+            6 : lambda values : array(values,dtype=int).sum(), # sum n_uniq
+            7 : lambda values : max([int(x) for x in values]), # max of best_uniq_A
+            8 : lambda values : max([int(x) for x in values]), # max of best_uniq_B
+            10 : setup_samples,
+            11 : assign_counts,
+            12 : lambda values : min([int(x) for x in values]), # min of edits
+            13 : lambda values : min([int(x) for x in values]), # min of anchor_overlap
+            14 : lambda values : min([int(x) for x in values]), # min of breakpoints
+        }
     
     from itertools import izip_longest
     parts = []
