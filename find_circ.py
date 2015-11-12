@@ -369,6 +369,7 @@ parser.add_option("-m","--margin",dest="margin",type=int,default=2,help="maximum
 parser.add_option("-d","--maxdist",dest="maxdist",type=int,default=2,help="maximum mismatches (no indels) allowed in anchor extensions (default=2)")
 
 parser.add_option("","--bwa-mem",dest="bwa_mem",default=False,action="store_true",help="Input is alignments of full length reads from BWA MEM, not BOWTIE2 anchor alignments from split reads [EXPERIMENTAL]")
+parser.add_option("","--debug",dest="debug",default=False,action="store_true",help="Activate LOTS of debug output")
 
 parser.add_option("","--noncanonical",dest="noncanonical",default=False,action="store_true",help="relax the GU/AG constraint (will produce many more ambiguous counts)")
 parser.add_option("","--randomize",dest="randomize",default=False,action="store_true",help="select randomly from tied, best, ambiguous hits")
@@ -537,8 +538,9 @@ def find_breakpoints(A,B,read,chrom,margin=options.margin,maxdist=options.maxdis
 
     L = len(read)
     hits = []
-    print "readlen",L
-    print " "*2+read
+    if options.debug:
+        print "readlen",L
+        print " "*2+read
     eff_a = options.asize-margin
     #print " "*2+A.query[:-margin]
     #print " "*(2+L-eff_b)+B.query[margin:]
@@ -558,8 +560,10 @@ def find_breakpoints(A,B,read,chrom,margin=options.margin,maxdist=options.maxdis
         spliced = A_flank[:x] + B_flank[x+2:]
         dist = mismatches(spliced,internal)        
         
-        bla = A_flank[:x].lower() + B_flank[x+2:]
-        print " "*(eff_a+2)+bla,dist
+        if options.debug:
+            bla = A_flank[:x].lower() + B_flank[x+2:]
+            if options.debug:
+                print " "*(eff_a+2)+bla,dist
 
         ov = 0
         if x < margin:
@@ -595,7 +599,8 @@ def find_breakpoints(A,B,read,chrom,margin=options.margin,maxdist=options.maxdis
                 elif gtag == 'CTAC':
                     hits.append((dist,ov,strandmatch(strand,'-'),rnd(),chrom,start,end,'GTAG','-'))
 
-    print hits
+    if options.debug:
+        print hits
     if len(hits) < 2:
         # unambiguous, return right away
         return hits
@@ -633,10 +638,10 @@ def prep_bwa_mem(alignments):
     """
     A,B = alignments
     full_read = A.seq
-    print A.cigar
-    print B.cigar
+    #print A.cigar
+    #print B.cigar
     if A.cigar[0][0] in [4,5]:
-        print "cigar swap"
+        #print "cigar swap"
         return B,A,full_read
     else:
         return A,B,full_read
@@ -664,8 +669,9 @@ def anchors_bwa_mem(sam):
 if options.bwa_mem:
     try:
         for A,B,read,sam_line in anchors_bwa_mem(sam):
-            print A
-            print B
+            if options.debug:
+                print A
+                print B
             N['total'] += 1
             if A.is_unmapped or B.is_unmapped:
                 N['unmapped'] += 1
@@ -701,7 +707,8 @@ if options.bwa_mem:
             #debug("A='%s' B='%s' dist=%d A.is_reverse=%s" % (A,B,dist,A.is_reverse))
             if dist < 0:
                 # the anchors align in reversed orientation -> circRNA?
-                print "potential circ"
+                if options.debug:
+                    print "potential circ"
                 chrom = sam.getrname(A.tid)
                 
                 bp = find_breakpoints(A,B,read,chrom)
