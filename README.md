@@ -234,12 +234,13 @@ quality:
 To get a reasonable set of circRNA candidates try:
 ```
     grep CIRCULAR <run_folder>/splice_sites.bed | \
-        grep -v chrM | \
+        grep -v chrM | \        
+        awk '$5>=2' | \
         grep UNAMBIGUOUS_BP | grep ANCHOR_UNIQUE | \
         ./maxlength.py 100000 \
         > <run_folder>/circ_candidates.bed
 ```
-This selects the circular splice sites with unambiguous detection of the breakpoint (*i.e.* the exact nucleotides at which splicing occurred), and unique anchor alignments on both sides of the junction. The last part subtracts start from end coordinates to compute the genomic length, and removes splice sites that are more than 100 kb apart. These are perhaps trans-splicing events, but for sure they are so huge they can seriously slow down any downstream scripts you may want to run on this output.
+This selects the circular splice sites supported by at least 2 reads with unambiguous detection of the breakpoint (*i.e.* the exact nucleotides at which splicing occurred), and unique anchor alignments on both sides of the junction. The last part subtracts start from end coordinates to compute the genomic length, and removes splice sites that are more than 100 kb apart. These are perhaps trans-splicing events, but for sure they are so huge they can seriously slow down any downstream scripts you may want to run on this output.
 
 ### Analyzing multiple samples ###
 
