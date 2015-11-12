@@ -537,8 +537,8 @@ def find_breakpoints(A,B,read,chrom,margin=options.margin,maxdist=options.maxdis
 
     L = len(read)
     hits = []
-    #print "readlen",L
-    #print " "*2+read
+    print "readlen",L
+    print " "*2+read
     eff_a = options.asize-margin
     #print " "*2+A.query[:-margin]
     #print " "*(2+L-eff_b)+B.query[margin:]
@@ -559,7 +559,7 @@ def find_breakpoints(A,B,read,chrom,margin=options.margin,maxdist=options.maxdis
         dist = mismatches(spliced,internal)        
         
         bla = A_flank[:x].lower() + B_flank[x+2:]
-        #print " "*(eff_a+2)+bla,dist
+        print " "*(eff_a+2)+bla,dist
 
         ov = 0
         if x < margin:
@@ -595,7 +595,7 @@ def find_breakpoints(A,B,read,chrom,margin=options.margin,maxdist=options.maxdis
                 elif gtag == 'CTAC':
                     hits.append((dist,ov,strandmatch(strand,'-'),rnd(),chrom,start,end,'GTAG','-'))
 
-    #print hits
+    print hits
     if len(hits) < 2:
         # unambiguous, return right away
         return hits
@@ -632,17 +632,14 @@ def prep_bwa_mem(alignments):
     the respective parts belonging to the other exon clipped.
     """
     A,B = alignments
-    #print A.cigar
-    #print B.cigar
-    
-    def trim_clipped(read):
-        start = read.pos
-        end = read.aend
-        seq = read.query
-        #print read.query, read.seq
-
-    trim_clipped(A)
-    trim_clipped(B)
+    full_read = A.seq
+    print A.cigar
+    print B.cigar
+    if A.cigar[0][0] in [4,5]:
+        print "cigar swap"
+        return B,A,full_read
+    else:
+        return A,B,full_read
     
 
 def anchors_bwa_mem(sam):
@@ -653,22 +650,22 @@ def anchors_bwa_mem(sam):
         #print read
         if read.qname != last_qname:
             if len(alignments) == 2:
-                A,B = alignments
-                yield A,B,line_num
+                A,B,full_read = prep_bwa_mem(alignments)
+                yield A,B,full_read,line_num
             alignments = []
 
         alignments.append(read)
         last_qname = read.qname
 
     if len(alignments) == 2:
-        A,B = alignments
-        yield A,B,line_num
+        A,B,full_read = prep_bwa_mem(alignments)
+        yield A,B,full_read,line_num
         
 if options.bwa_mem:
     try:
-        for A,B,sam_line in anchors_bwa_mem(sam):
-            #print A
-            #print B
+        for A,B,read,sam_line in anchors_bwa_mem(sam):
+            print A
+            print B
             N['total'] += 1
             if A.is_unmapped or B.is_unmapped:
                 N['unmapped'] += 1
@@ -692,19 +689,19 @@ if options.bwa_mem:
                 bam_out.write(A)
                 bam_out.write(B)
 
-            if options.bwa_mem:
-                read = A.seq
-            else:
-                read = A.qname.split('__')[1]
-                if A.is_reverse:
-                    read = rev_comp(read)                        
-                    A,B = B,A
-                    dist *= -1
+            #if options.bwa_mem:
+                #read = A.seq
+            #else:
+                #read = A.qname.split('__')[1]
+                #if A.is_reverse:
+                    #read = rev_comp(read)                        
+                    #A,B = B,A
+                    #dist *= -1
 
             #debug("A='%s' B='%s' dist=%d A.is_reverse=%s" % (A,B,dist,A.is_reverse))
             if dist < 0:
                 # the anchors align in reversed orientation -> circRNA?
-                #print "potential circ"
+                print "potential circ"
                 chrom = sam.getrname(A.tid)
                 
                 bp = find_breakpoints(A,B,read,chrom)
@@ -723,7 +720,7 @@ if options.bwa_mem:
                     h = (chrom,start+1,end-1,sense)
                     circs[h].add(read,A,B,dist,ov,strandmatch,signal,n_hits)
 
-            elif dist >= 0:
+            elif dist > 0:
                 # the anchors align sequentially -> linear/normal splice junction?
                 
                 bp = find_breakpoints(A,B,read,chrom)
