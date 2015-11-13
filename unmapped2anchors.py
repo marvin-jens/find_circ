@@ -57,6 +57,7 @@ parser.add_option("-q","--minqual",dest="minqual",type=int,default=5,help="min a
 parser.add_option("-r","--rev",dest="rev",type="choice",choices=["A","B","R","N","C","P"],default="N",help="permute read parts or reverse A,B,R,C,N for control")
 parser.add_option("-R","--reads",dest="reads",action="store_true",default=False,help="instead of unmapped reads from BAM, input is sites.reads from find_circ.py")
 parser.add_option("-F","--fasta",dest="fasta",action="store_true",default=False,help="instead of unmapped reads from BAM, input is FASTA file")
+parser.add_option("-Q","--fastq",dest="fastq",action="store_true",default=False,help="instead of unmapped reads from BAM, input is FASTQ file")
 
 options,args = parser.parse_args()
 
@@ -163,7 +164,24 @@ elif options.fasta:
         read.qual = "b"*len(seq)
 
         handle_read(read)
-        
+
+elif options.fastq:
+    from sequence_data.io import qfa_chunks
+    N = 0
+    for fq in qfa_chunks(file(args[0])):
+        N += 1
+        name = fq.name.replace(" ","_")
+        class Item(object):
+            pass
+
+        read = Item()
+        read.qname = "%s_%d" % (name,N)
+        read.is_unmapped=True
+        read.seq = fq.seq
+        read.qual = fq.qual
+
+        handle_read(read)
+    
 else:
     for read in pysam.Samfile(args[0],'rb'):
         handle_read(read)
