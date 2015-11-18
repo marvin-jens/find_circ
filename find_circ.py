@@ -634,18 +634,35 @@ def prep_bwa_mem(alignments):
     """
     Input is the list of primary alignments as reported by BWA MEM.
     In the simplest case these are two alignments to two exons, with 
-    the respective parts belonging to the other exon clipped.
+    the respective parts belonging to the other exon clipped. 
+    However, for longer reads these may also be split into three or 
+    more segments.
     """
-    A,B = alignments
-    full_read = A.seq
+    left = None
+    right = None
+    internal = []
+    for a in alignments:
+        if a.cigar[0][0] in [4,5]:
+            # clipped in beginning
+            if a.cigar[-1][0] in [4,5]:
+                # also clipped in the end? -internal
+                internal.append(a)
+            else:
+                # only beginning
+                left = a
+        elif a.cigar[-1][0] in [4,5]:
+            # clipped in the end
+            right = a
+        else:
+            # not clipped at all. WTF?
+            raise ValueError("contiguous alignment should not happen! %s" % str(a))
+
     #print A.cigar
     #print B.cigar
-    if A.cigar[0][0] in [4,5]:
-        #print "cigar swap"
-        return B,A,full_read
-    else:
-        return A,B,full_read
-    
+    # first reported alignment always contains full read
+    full_read = alignments[0].seq
+    print left,right,full_read
+    return left,right,full_read
 
 def anchors_bwa_mem(sam):
     last_qname = ""
@@ -654,7 +671,7 @@ def anchors_bwa_mem(sam):
     for line_num,read in enumerate(sam):
         #print read
         if read.qname != last_qname:
-            if len(alignments) == 2:
+            if len(alignments) >= 2:
                 A,B,full_read = prep_bwa_mem(alignments)
                 yield A,B,full_read,line_num
             alignments = []
@@ -662,12 +679,13 @@ def anchors_bwa_mem(sam):
         alignments.append(read)
         last_qname = read.qname
 
-    if len(alignments) == 2:
+    if len(alignments) >= 2:
         A,B,full_read = prep_bwa_mem(alignments)
         yield A,B,full_read,line_num
         
 if options.bwa_mem:
     try:
+        sam_line = 0
         for A,B,read,sam_line in anchors_bwa_mem(sam):
             if options.debug:
                 print A
