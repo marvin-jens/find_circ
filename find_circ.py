@@ -649,10 +649,10 @@ def prep_bwa_mem(alignments):
                 internal.append(a)
             else:
                 # only beginning
-                left = a
+                right = a
         elif a.cigar[-1][0] in [4,5]:
             # clipped in the end
-            right = a
+            left = a
         else:
             # not clipped at all. WTF?
             raise ValueError("contiguous alignment should not happen! %s" % str(a))
@@ -661,7 +661,7 @@ def prep_bwa_mem(alignments):
     #print B.cigar
     # first reported alignment always contains full read
     full_read = alignments[0].seq
-    print left,right,full_read
+    print "PREP",left,right,full_read
     return left,right,full_read
 
 def anchors_bwa_mem(sam):
