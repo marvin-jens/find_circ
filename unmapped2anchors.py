@@ -44,6 +44,54 @@ def complement(s):
 def rev_comp(seq):
     return complement(seq)[::-1]
 
+def fasta_chunks(lines,strip=True,fuse=True):
+    chunk = ""
+    data = []
+
+    for l in lines:
+        if l.startswith("#"): continue
+        if l.startswith(">"):
+            if data and chunk:
+                #print chunk
+                yield chunk,"".join(data)
+
+                if strip:
+                    data = []
+                else:
+                    data = [l]
+
+            chunk = l[1:].strip()
+        else:
+            if fuse:
+                data.append(l.rstrip())
+            else:
+                data.append(l)
+
+    if data and chunk:
+        yield chunk,"".join(data)
+
+def qfa_chunks(lines):
+    """
+    Iterates over FASTQ text lines from a file like object and yields
+    NamedTuple instances of the FASTQ with attributes 
+    qfa.name, qfa.seq, qfa.qual
+    """
+    from collections import namedtuple
+    QFA = namedtuple("qfa_tuple","name,seq,qual")
+    
+    I = lines.__iter__()
+
+    try:
+        while I:
+            name = I.next().rstrip()[1:]
+            seq = I.next().rstrip()
+            plus = I.next().rstrip()[1:]
+            qual = I.next().rstrip()
+        
+            yield QFA(name,seq,qual)
+    except StopIteration:
+        pass
+
 usage = """
 
   %prog <alignments.bam> > unmapped_anchors.qfa
@@ -149,7 +197,6 @@ if options.reads:
         handle_read(read)
 
 elif options.fasta:
-    from sequence_data.io import fasta_chunks
     N = 0
     for name,seq in fasta_chunks(file(args[0])):
         N += 1
@@ -166,7 +213,6 @@ elif options.fasta:
         handle_read(read)
 
 elif options.fastq:
-    from sequence_data.io import qfa_chunks
     N = 0
     for fq in qfa_chunks(file(args[0])):
         N += 1
