@@ -630,7 +630,7 @@ def anchors_bowtie2(sam):
         yield A,B,pair_num * 2
     
     
-def prep_bwa_mem(alignments):
+def prep_bwa_mem(segments):
     """
     Input is the list of primary alignments as reported by BWA MEM.
     In the simplest case these are two alignments to two exons, with 
@@ -638,31 +638,58 @@ def prep_bwa_mem(alignments):
     However, for longer reads these may also be split into three or 
     more segments.
     """
-    left = None
-    right = None
-    internal = []
-    for a in alignments:
-        if a.cigar[0][0] in [4,5]:
-            # clipped in beginning
-            if a.cigar[-1][0] in [4,5]:
-                # also clipped in the end? -internal
-                internal.append(a)
-            else:
-                # only beginning
-                left = a
-        elif a.cigar[-1][0] in [4,5]:
-            # clipped in the end
-            right = a
-        else:
-            # not clipped at all. WTF?
-            raise ValueError("contiguous alignment should not happen! %s" % str(a))
 
-    #print A.cigar
-    #print B.cigar
-    # first reported alignment always contains full read
-    full_read = alignments[0].seq
-    print left,right,full_read
-    return left,right,full_read
+    # the first BWA reported alignment for a read always contains the 
+    # full, original read sequence
+    full_read = segments[0].seq
+    
+    def aligned_start_from_cigar(seg):
+        """
+        Determines the internal start position of this segment,
+        relative to the full read sequence.
+        """
+        start = 0
+        for op,count in seg.cigar:
+            if op in [4,5]: # soft or hard clip
+                start += count
+            elif op == 0: # match: aligned part begins
+                break
+        return start
+
+    internal_starts = dict([( seg,aligned_start_from_cigar(seg) ) for seg in segments])
+    internal_ends   = dict([( seg,internal_starts[seg] + len(seg.query) ) for seg in segments])
+    
+    # sort by reference start position
+    seg_by_ref = sorted(segments,key = lambda seg : seg.pos)
+    
+    # sort by internal start position
+    seg_by_seq = sorted(segments,key = lambda seg: internal_starts[seg])
+    
+    if seg_by_ref == seg_by_seq:
+        # all segments align contiguosly: linearly spliced read
+        # TODO: exclude segments on different chromosomes/strands, etc.
+        print "LINEAR"
+
+    # iterate over consecutive pairs of segments to find the 
+    # splices between them
+    # [A,B,C,D] -> (A,B),(B,C),(C,D)
+    for seg_a,seg_b in zip(seg_by_seq, seg_by_seq[1:]):
+        print "A",seg_a
+        print "B",seg_b
+        start_a = internal_starts[seg_a]
+        end_a   = internal_ends[seg_a]
+        len_a =  end_a - start_a
+        
+        start_b = internal_starts[seg_b]
+        end_b   = internal_ends[seg_b]
+        len_b = end_b - start_b
+        
+        if len_a < options.asize or len_b < options.asize:
+            # segment length is below required anchor length
+            continue
+
+        read_part = full_read[min(start_a,start_b):max(end_a,end_b)]
+        yield seg_a,seg_b,read_part
 
 def anchors_bwa_mem(sam):
     last_qname = ""
@@ -672,16 +699,16 @@ def anchors_bwa_mem(sam):
         #print read
         if read.qname != last_qname:
             if len(alignments) >= 2:
-                A,B,full_read = prep_bwa_mem(alignments)
-                yield A,B,full_read,line_num
+                for A,B,full_read in prep_bwa_mem(alignments):
+                    yield A,B,full_read,line_num
             alignments = []
 
         alignments.append(read)
         last_qname = read.qname
 
     if len(alignments) >= 2:
-        A,B,full_read = prep_bwa_mem(alignments)
-        yield A,B,full_read,line_num
+        for A,B,full_read in prep_bwa_mem(alignments):
+            yield A,B,full_read,line_num
         
 if options.bwa_mem:
     try:
