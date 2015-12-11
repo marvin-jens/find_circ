@@ -426,11 +426,12 @@ minmapscore = options.asize * (-2)
 class Hit(object):
     def __init__(self):
         self.reads = []
+        self.counts = 0.
         self.readnames = []
         self.uniq = set()
         self.mapquals_A = []
         self.mapquals_B = []
-        self.uniq_bridges = 0
+        self.uniq_bridges = 0.
         self.tissues = defaultdict(int)
         self.edits = []
         self.overlaps = []
@@ -440,12 +441,13 @@ class Hit(object):
         self.strand_minus = 0
         self.strandmatch = 'NA'
         
-    def add(self,read,A,B,dist,ov,strandmatch,signal,n_hits):
+    def add(self,read,A,B,dist,ov,strandmatch,signal,n_hits,weight):
         self.signal = signal
         self.strandmatch = strandmatch      
         self.edits.append(dist)
         self.overlaps.append(ov)
         self.n_hits.append(n_hits)
+        self.counts += weight
 
         # by convention have A precede B in the genome.
         if A.pos > B.pos:
@@ -459,7 +461,7 @@ class Hit(object):
 
         if qA and qB:
             # both anchors from the *same read* align uniquely
-            self.uniq_bridges += 1
+            self.uniq_bridges += weight
 
         self.mapquals_A.append(qA)
         self.mapquals_B.append(qB)
@@ -475,10 +477,10 @@ class Hit(object):
         
         # record the spliced read sequence as it was before mapping
         if A.is_reverse:
-            self.strand_minus += 1
+            self.strand_minus += weight
             self.reads.append(rev_comp(read))
         else:
-            self.strand_plus += 1
+            self.strand_plus += weight
             self.reads.append(read)
 
         # identify the tissue/sample it came from
@@ -488,14 +490,14 @@ class Hit(object):
                 sample_name = tiss
                 break
 
-        self.tissues[sample_name] += 1
+        self.tissues[sample_name] += weight
         
         self.uniq.add((read,sample_name))
         self.uniq.add((rev_comp(read),sample_name))
 
 
     def scores(self,chrom,start,end,sense):
-        n_reads = len(self.reads)
+        n_spanned = len(self.reads)
         n_uniq = len(self.uniq) / 2
         #print sorted(self.mapquals_A,reverse=True)
         #print sorted(self.mapquals_B,reverse=True)
@@ -505,14 +507,14 @@ class Hit(object):
         #print self.edits,self.overlaps,self.n_hits
         tissues = sorted(self.tissues.keys())
         tiss_counts = [str(self.tissues[k]) for k in tissues]
-        return (n_reads,n_uniq,best_qual_A,best_qual_B,self.uniq_bridges,tissues,tiss_counts,min(self.edits),min(self.overlaps),min(self.n_hits),self.signal,self.strandmatch)
+        return (n_spanned,self.counts,n_uniq,best_qual_A,best_qual_B,self.uniq_bridges,tissues,tiss_counts,min(self.edits),min(self.overlaps),min(self.n_hits),self.signal,self.strandmatch)
                 
         
 loci = defaultdict(list)
 circs = defaultdict(Hit)
 splices = defaultdict(Hit)
 
-N = defaultdict(int)
+N = defaultdict(float)
 
 from numpy import chararray as carray
 from numpy import fromstring,byte
@@ -643,6 +645,11 @@ def prep_bwa_mem(segments):
     # full, original read sequence
     full_read = segments[0].seq
     
+    # weight to assign to each splice. Now that a read can contain multiple 
+    # splices (or a circRNA read even the same splice multiple times), we 
+    # do not want to overcount.
+    weight = 1./(len(segments)-1)
+    
     def aligned_start_from_cigar(seg):
         """
         Determines the internal start position of this segment,
@@ -665,17 +672,19 @@ def prep_bwa_mem(segments):
     # sort by internal start position
     seg_by_seq = sorted(segments,key = lambda seg: internal_starts[seg])
     
-    if seg_by_ref == seg_by_seq:
-        # all segments align contiguosly: linearly spliced read
-        # TODO: exclude segments on different chromosomes/strands, etc.
-        print "LINEAR"
+    #if seg_by_ref == seg_by_seq:
+        ## all segments align contiguosly: linearly spliced read
+        ## TODO: exclude segments on different chromosomes/strands, etc.
+        #print "LINEAR"
 
     # iterate over consecutive pairs of segments to find the 
     # splices between them
     # [A,B,C,D] -> (A,B),(B,C),(C,D)
     for seg_a,seg_b in zip(seg_by_seq, seg_by_seq[1:]):
-        print "A",seg_a
-        print "B",seg_b
+        if options.debug:
+            print "A",seg_a
+            print "B",seg_b
+
         start_a = internal_starts[seg_a]
         end_a   = internal_ends[seg_a]
         len_a =  end_a - start_a
@@ -686,10 +695,14 @@ def prep_bwa_mem(segments):
         
         if len_a < options.asize or len_b < options.asize:
             # segment length is below required anchor length
+            if options.debug:
+                print "segment length is below required anchor length"
             continue
 
         read_part = full_read[min(start_a,start_b):max(end_a,end_b)]
-        yield seg_a,seg_b,read_part
+        if options.debug:
+            print "read_part",read_part
+        yield seg_a,seg_b,read_part,weight
 
 def anchors_bwa_mem(sam):
     last_qname = ""
@@ -699,40 +712,43 @@ def anchors_bwa_mem(sam):
         #print read
         if read.qname != last_qname:
             if len(alignments) >= 2:
-                for A,B,full_read in prep_bwa_mem(alignments):
-                    yield A,B,full_read,line_num
+                for A,B,full_read,weight in prep_bwa_mem(alignments):
+                    yield A,B,full_read,weight,line_num
             alignments = []
 
         alignments.append(read)
         last_qname = read.qname
 
     if len(alignments) >= 2:
-        for A,B,full_read in prep_bwa_mem(alignments):
-            yield A,B,full_read,line_num
+        for A,B,full_read,weight in prep_bwa_mem(alignments):
+            yield A,B,full_read,weight,line_num
         
 if options.bwa_mem:
     try:
         sam_line = 0
-        for A,B,read,sam_line in anchors_bwa_mem(sam):
+        for A,B,read,w,sam_line in anchors_bwa_mem(sam):
             if options.debug:
                 print A
                 print B
             N['total'] += 1
             if A.is_unmapped or B.is_unmapped:
-                N['unmapped'] += 1
+                N['unmapped'] += w
                 continue
             if A.tid != B.tid:
-                N['other_chrom'] += 1
+                N['other_chrom'] += w
                 continue
             if A.is_reverse != B.is_reverse:
-                N['other_strand'] += 1
+                N['other_strand'] += w
                 continue
 
-            dist = B.pos - A.pos
-            if numpy.abs(dist) < options.asize:
-                N['overlapping_anchors'] += 1
-                continue
+            dist = B.pos - A.aend
+            #if numpy.abs(dist) < options.asize:
+                #N['overlapping_anchors'] += 1
+                #print "overlap"
+                #continue
             
+            if options.debug:
+                print "pair made it through initial filters"
             ### anchor pairs that make it up to here are interesting
             chrom = sam.getrname(A.tid)
 
@@ -758,9 +774,9 @@ if options.bwa_mem:
                 
                 bp = find_breakpoints(A,B,read,chrom)
                 if not bp:
-                    N['circ_no_bp'] += 1
+                    N['circ_no_bp'] += w
                 else:
-                    N['circ_reads'] += 1
+                    N['circ_reads'] += w
 
                 n_hits = len(bp)
                 if bp and not options.allhits:
@@ -770,7 +786,7 @@ if options.bwa_mem:
                     # for some weird reason for circ we need a correction here
                     dist,ov,strandmatch,rnd,chrom,start,end,signal,sense = h
                     h = (chrom,start+1,end-1,sense)
-                    circs[h].add(read,A,B,dist,ov,strandmatch,signal,n_hits)
+                    circs[h].add(read,A,B,dist,ov,strandmatch,signal,n_hits,w)
 
             elif dist > 0:
                 # the anchors align sequentially -> linear/normal splice junction?
@@ -788,7 +804,7 @@ if options.bwa_mem:
                     #print h
                     dist,ov,strandmatch,rnd,chrom,start,end,signal,sense = h
                     h = (chrom,start,end,sense)
-                    splices[h].add(read,A,B,dist,ov,strandmatch,signal,n_hits)
+                    splices[h].add(read,A,B,dist,ov,strandmatch,signal,n_hits,w)
                     
                     # remember the spliced reads at these sites
                     loci[(chrom,start,sense)].append(splices[h])
@@ -812,8 +828,9 @@ if options.bwa_mem:
 else:
     try:
         for A,B,sam_line in anchors_bowtie2(sam):
-            print A
-            print B
+            if options.debug:
+                print A
+                print B
             N['total'] += 1
             if A.is_unmapped or B.is_unmapped:
                 N['unmapped'] += 1
@@ -907,12 +924,12 @@ else:
         sys.exit(1)
 
 def output(cand,prefix):
-    print "#","\t".join(['chrom','start','end','name','n_reads','strand','n_uniq','uniq_bridges','best_qual_left','best_qual_right','tissues','tiss_counts','edits','anchor_overlap','breakpoints','signal','strandmatch','category'])
+    print "#","\t".join(['chrom','start','end','name','counts','strand','n_spanned','n_uniq','uniq_bridges','best_qual_left','best_qual_right','tissues','tiss_counts','edits','anchor_overlap','breakpoints','signal','strandmatch','category'])
     n = 1
     for c,hit in cand.items():
         #print c
         chrom,start,end,sense = c
-        n_reads,n_uniq,best_qual_A,best_qual_B,uniq_bridges,tissues,tiss_counts,min_edit,min_anchor_ov,n_hits,signal,strandmatch = hit.scores(chrom,start,end,sense)
+        n_spanned,counts,n_uniq,best_qual_A,best_qual_B,uniq_bridges,tissues,tiss_counts,min_edit,min_anchor_ov,n_hits,signal,strandmatch = hit.scores(chrom,start,end,sense)
         
         if options.halfunique:
             if (best_qual_A < options.min_uniq_qual) and (best_qual_B < options.min_uniq_qual):
@@ -960,7 +977,9 @@ def output(cand,prefix):
             categories.append("LINEAR")
 
 
-        bed = [chrom,start-1,end,name,n_reads,sense,n_uniq,uniq_bridges,best_qual_A,best_qual_B,",".join(tissues),",".join(tiss_counts),min_edit,min_anchor_ov,n_hits,signal,strandmatch,",".join(sorted(categories))]
+        bed = [
+            chrom,start-1,end,name,counts,sense,n_spanned,n_uniq,uniq_bridges,best_qual_A,best_qual_B,",".join(tissues),",".join(tiss_counts),min_edit,min_anchor_ov,n_hits,signal,strandmatch,",".join(sorted(categories))
+        ]
         print "\t".join([str(b) for b in bed])
 
 stats = file(options.stats,"w")
