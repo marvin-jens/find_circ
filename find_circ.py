@@ -648,7 +648,7 @@ def prep_bwa_mem(segments):
     # weight to assign to each splice. Now that a read can contain multiple 
     # splices (or a circRNA read even the same splice multiple times), we 
     # do not want to overcount.
-    weight = 1./(len(segments)-1)
+    weight = 1./(len(segments)-1.)
     
     def aligned_start_from_cigar(seg):
         """

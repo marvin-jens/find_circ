@@ -1,7 +1,7 @@
 .DELETE_ON_ERROR:
 
-GENOME_HG19=/data/BIO2/pcp/systems/hg19/genome/hg19.fna
-INDEX_HG19=/data/BIO2/pcp/systems/hg19/indices/bt2_hg19
+GENOME_HG19=/scratch/systems/hg19/genome/hg19.fa
+INDEX_HG19=/scratch/systems/hg19/genome/hg19.fa
 
 cdr1as_test: cdr1as_test_out/splice_sites.bed
 	@printf "\n>>> comparing to known CDR1as result.\n\n"
@@ -46,12 +46,11 @@ hek_test: hek_test_out/splice_sites.bed
 	@printf "\n>>> comparing HEK293 test results to reference result.\n\n"
 	../cmp_bed.py hek_reference.bed hek_test_out/splice_sites.bed > /dev/null
 
-hek_test_out/splice_sites.bed: $(GENOME_HG19) $(INDEX_HG19).4.bt2 hek_anchors.fastq.gz
+hek_test_out/splice_sites.bed: $(GENOME_HG19) $(INDEX_HG19).bwt hek_spliced_reads.fa
 	@printf "\n>>> aligning HEK293 anchors and piping through find_circ.py\n\n"
 	mkdir -p hek_test_out
-	bowtie2 -p8 --very-sensitive --score-min=C,-15,0 --reorder --mm \
-		-q -U hek_anchors.fastq.gz  -x $(INDEX_HG19) 2> hek_test_out/bt2.log | \
-			../find_circ.py --genome $(GENOME_HG19) \
+	bwa mem -t16 -k 15 -T 1 $(INDEX_HG19) hek_spliced_reads.fa | \
+			../find_circ.py --bwa-mem --genome $(GENOME_HG19) \
 				--name=hek_test --prefix=hek_test_ \
 				--stats=hek_test_out/hek_test.log \
 				--reads=hek_test_out/spliced_reads.fa \
@@ -61,14 +60,11 @@ hek_test2: hek_test_out/splice_sites2.bed
 	@printf "\n>>> comparing new results to previous result.\n\n"
 	../cmp_bed.py hek_test_out/splice_sites.bed hek_test_out/splice_sites2.bed > /dev/null
 
-hek_test_out/splice_sites2.bed: $(GENOME_HG19) $(INDEX_HG19).4.bt2 hek_test_out/splice_sites.bed 
+hek_test_out/splice_sites2.bed: $(GENOME_HG19) $(INDEX_HG19).bwt hek_test_out/spliced_reads.fa
 	@printf "\n>>> using the spliced reads detected in the previous HEK293 run to repeat the analysis\n"
-	@printf " >>> splitting spliced_reads.fa into anchors\n"
-	../unmapped2anchors.py --fasta hek_test_out/spliced_reads.fa > hek_anchors2.fastq
-	@printf "\n >>> re-mapping anchors and piping through find_circ.py\n"
-	bowtie2 -p8 --very-sensitive --score-min=C,-15,0 --reorder --mm \
-		-q -U hek_anchors2.fastq  -x $(INDEX_HG19) 2> hek_test_out/bt2.2.log | \
-			../find_circ.py --genome $(GENOME_HG19) \
+	@printf "\n >>> re-mapping and piping through find_circ.py\n"
+	bwa mem -t16 -k 15 -T 1 $(INDEX_HG19) hek_test_out/spliced_reads.fa | \
+			../find_circ.py --bwa-mem --genome $(GENOME_HG19) \
 				--name=hek_test --prefix=hek_test_ \
 				--stats=hek_test_out/hek_test2.log \
 				--reads=hek_test_out/spliced_reads2.fa \
