@@ -363,7 +363,7 @@ parser.add_option("-S","--system",dest="system",type=str,default="",help="model 
 parser.add_option("-G","--genome",dest="genome",type=str,default="",help="path to genome (either a folder with chr*.fa or one multichromosome FASTA file)")
 parser.add_option("-n","--name",dest="name",default="unknown",help="tissue/sample name to use (default='unknown')")
 parser.add_option("-p","--prefix",dest="prefix",default="",help="prefix to prepend to each junction name (default='')")
-parser.add_option("-q","--min_uniq_qual",dest="min_uniq_qual",type=int,default=2,help="minimal uniqness for anchor alignments (default=2)")
+parser.add_option("-q","--min_uniq_qual",dest="min_uniq_qual",type=int,default=1,help="minimal uniqness for anchor alignments (default=2)")
 parser.add_option("-a","--anchor",dest="asize",type=int,default=20,help="anchor size (default=20)")
 parser.add_option("-m","--margin",dest="margin",type=int,default=2,help="maximum nts the BP is allowed to reside inside an anchor (default=2)")
 parser.add_option("-d","--maxdist",dest="maxdist",type=int,default=2,help="maximum mismatches (no indels) allowed in anchor extensions (default=2)")
@@ -716,6 +716,10 @@ def anchors_bwa_mem(sam):
                     yield A,B,full_read,weight,line_num
             alignments = []
 
+        if alignments:
+            if read.tid != alignments[0].tid:
+                # supplementary hit is on another chromosome. Not what we're looking for!
+                continue
         alignments.append(read)
         last_qname = read.qname
 
@@ -796,6 +800,7 @@ if options.bwa_mem:
                     N['splice_no_bp'] += 1
                 else:
                     N['spliced_reads'] += 1
+
                 n_hits = len(bp)
                 if bp and not options.allhits:
                     bp = [bp[0],]
@@ -927,10 +932,11 @@ def output(cand,prefix):
     print "#","\t".join(['chrom','start','end','name','counts','strand','n_spanned','n_uniq','uniq_bridges','best_qual_left','best_qual_right','tissues','tiss_counts','edits','anchor_overlap','breakpoints','signal','strandmatch','category'])
     n = 1
     for c,hit in cand.items():
-        #print c
+        #print c,hit
         chrom,start,end,sense = c
         n_spanned,counts,n_uniq,best_qual_A,best_qual_B,uniq_bridges,tissues,tiss_counts,min_edit,min_anchor_ov,n_hits,signal,strandmatch = hit.scores(chrom,start,end,sense)
-        
+        #print n_spanned,counts,n_uniq,best_qual_A,best_qual_B,uniq_bridges,tissues,tiss_counts,min_edit,min_anchor_ov,n_hits,signal,strandmatch
+        #print best_qual_A,best_qual_B, uniq_bridges
         if options.halfunique:
             if (best_qual_A < options.min_uniq_qual) and (best_qual_B < options.min_uniq_qual):
                 N['anchor_not_uniq'] += 1
@@ -944,11 +950,12 @@ def output(cand,prefix):
                 N['no_uniq_bridges'] += 1
                 continue
 
+        #print N
         name = "%s%s_%06d" % (options.prefix,prefix,n)
         n += 1
         #sys.stderr.write("%s\t%s\n" % (name,"\t".join(sorted(reads))))
         for r_seq,ori_name in zip(hit.reads,hit.readnames):
-            readfile.write(">%s %s\n%s\n" % (name,ori_name,r_seq))
+            readfile.write(">%s %s\n%s\n" % (ori_name,name,r_seq))
       
         categories = []
         if signal == "GTAG":

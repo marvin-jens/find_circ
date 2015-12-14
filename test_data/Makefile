@@ -49,9 +49,9 @@ hek_test: hek_test_out/splice_sites.bed
 hek_test_out/splice_sites.bed: $(GENOME_HG19) $(INDEX_HG19).bwt hek_spliced_reads.fa
 	@printf "\n>>> aligning HEK293 anchors and piping through find_circ.py\n\n"
 	mkdir -p hek_test_out
-	bwa mem -t16 -k 15 -T 1 $(INDEX_HG19) hek_spliced_reads.fa | \
+	bwa mem -t16 -A2 -B10 -k 15 -T 1 $(INDEX_HG19) hek_spliced_reads.fa | \
 			../find_circ.py --bwa-mem --genome $(GENOME_HG19) \
-				--name=hek_test --prefix=hek_test_ \
+				--name=hek_test --prefix=newhek_test_ \
 				--stats=hek_test_out/hek_test.log \
 				--reads=hek_test_out/spliced_reads.fa \
 				> hek_test_out/splice_sites.bed
