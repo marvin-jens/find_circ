@@ -15,6 +15,7 @@ with find_circ.py output and adds a few extra columns.
 parser = OptionParser(usage=usage)
 parser.add_option("-f","--flank",dest="flank",type=int,default=0,help="add flanking nucleotides to define more fuzzy overlap (default=0)")
 parser.add_option("-s","--stats",dest="stats",default="",help="write statistics to this file (instead of stderr)")
+parser.add_option("-6","--bed6",dest="bed6",default=False,action="store_true",help="ignore all columns except the first six standard BED columns (default=False)")
 options,args = parser.parse_args()
 
 from numpy import *
@@ -100,8 +101,8 @@ def consensus_line(lines,comb):
 
     col_map = { 
         3 : lambda values : ",".join(sorted(values)), # combine identifiers
-        4 : lambda values : array(values,dtype=int).sum(), # sum n_reads
-        6 : lambda values : array(values,dtype=int).sum(), # sum n_uniq
+        4 : lambda values : array(values,dtype=float).sum(), # sum n_reads
+        6 : lambda values : array(values,dtype=float).sum(), # sum n_uniq
         7 : lambda values : max([int(x) for x in values]), # max of best_uniq_A
         8 : lambda values : max([int(x) for x in values]), # max of best_uniq_B
         9 : lambda values : array(values,dtype=int).sum(), # sum ov_linear_A
@@ -115,7 +116,10 @@ def consensus_line(lines,comb):
     
     from itertools import izip_longest
     parts = []
-    for i,column in enumerate(izip_longest(*[l.rstrip().split('\t') for l in lines],fillvalue="")):
+    source = enumerate(izip_longest(*[l.rstrip().split('\t') for l in lines],fillvalue=""))
+    if options.bed6:
+        source = enumerate(izip_longest(*[l.rstrip().split('\t')[:6] for l in lines],fillvalue=""))
+    for i,column in source:
         #print i,column
         if i in col_map:
             parts.append(str(col_map[i](column)))
