@@ -384,6 +384,7 @@ parser.add_option("-B","--bam",dest="bam",default="",help="filename to store anc
 parser.add_option("-r","--reads2samples",dest="reads2samples",default="",help="path to tab-separated two-column file with read-name prefix -> sample ID mapping")
 parser.add_option("-s","--stats",dest="stats",default="runstats.log",help="write numeric statistics on the run to this file")
 parser.add_option("-t","--throughput",dest="throughput",default=False,action="store_true",help="print information on throughput to stderr (useful for benchmarking)")
+parser.add_option("","--noop",dest="noop",default=False,action="store_true",help="Do not search fot any junctions. Only process the alignment stream (useful for benchmarking)")
 options,args = parser.parse_args()
 
 if options.version:
@@ -742,6 +743,9 @@ if options.bwa_mem:
     try:
         sam_line = 0
         for A,B,read,w,sam_line in anchors_bwa_mem(sam):
+            if options.noop:
+                continue
+
             if options.debug:
                 print A
                 print B
