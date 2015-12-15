@@ -383,6 +383,7 @@ parser.add_option("-R","--reads",dest="reads",default="",help="write spliced rea
 parser.add_option("-B","--bam",dest="bam",default="",help="filename to store anchor alignments that were recorded as linear or circular junction candidates")
 parser.add_option("-r","--reads2samples",dest="reads2samples",default="",help="path to tab-separated two-column file with read-name prefix -> sample ID mapping")
 parser.add_option("-s","--stats",dest="stats",default="runstats.log",help="write numeric statistics on the run to this file")
+parser.add_option("-t","--throughput",dest="throughput",default=False,action="store_true",help="print information on throughput to stderr (useful for benchmarking)")
 options,args = parser.parse_args()
 
 if options.version:
@@ -707,7 +708,9 @@ def prep_bwa_mem(segments):
 def anchors_bwa_mem(sam):
     last_qname = ""
     alignments = []
-               
+
+    from time import time
+    t0 = time()
     for line_num,read in enumerate(sam):
         #print read
         if read.qname != last_qname:
@@ -722,6 +725,14 @@ def anchors_bwa_mem(sam):
                 continue
         alignments.append(read)
         last_qname = read.qname
+        
+        if options.throughput:
+            if line_num and not line_num % 10000:
+                t1 = time()
+                k_reads = line_num / 1000.
+                mins = (t1 - t0)/60.
+                rps = line_num/(t1-t0)
+                sys.stderr.write("processed {k_reads:.1f}k reads in {mins:.1f} minutes ({rps:.2f} reads/second)\n".format(**locals()))
 
     if len(alignments) >= 2:
         for A,B,full_read,weight in prep_bwa_mem(alignments):
