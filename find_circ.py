@@ -384,7 +384,8 @@ parser.add_option("-B","--bam",dest="bam",default="",help="filename to store anc
 parser.add_option("-r","--reads2samples",dest="reads2samples",default="",help="path to tab-separated two-column file with read-name prefix -> sample ID mapping")
 parser.add_option("-s","--stats",dest="stats",default="runstats.log",help="write numeric statistics on the run to this file")
 parser.add_option("-t","--throughput",dest="throughput",default=False,action="store_true",help="print information on throughput to stderr (useful for benchmarking)")
-parser.add_option("","--noop",dest="noop",default=False,action="store_true",help="Do not search fot any junctions. Only process the alignment stream (useful for benchmarking)")
+parser.add_option("","--noop",dest="noop",default=False,action="store_true",help="Do not search for any junctions. Only process the alignment stream (useful for benchmarking)")
+parser.add_option("","--nolinear",dest="nolinear",default=False,action="store_true",help="Do not search for linear junctions, only circular (saves some time)")
 options,args = parser.parse_args()
 
 if options.version:
@@ -738,6 +739,14 @@ def anchors_bwa_mem(sam):
     if len(alignments) >= 2:
         for A,B,full_read,weight in prep_bwa_mem(alignments):
             yield A,B,full_read,weight,line_num
+
+tid_cache = {}
+def fast_chrom_lookup(read):
+    tid = read.tid
+    if not tid in tid_cache: 
+        tid_cache[tid] = sam.getrname(tid)
+
+    return tid_cache[tid]
         
 if options.bwa_mem:
     try:
@@ -760,37 +769,22 @@ if options.bwa_mem:
                 N['other_strand'] += w
                 continue
 
-            dist = B.pos - A.aend
-            #if numpy.abs(dist) < options.asize:
-                #N['overlapping_anchors'] += 1
-                #print "overlap"
-                #continue
             
             if options.debug:
                 print "pair made it through initial filters"
             ### anchor pairs that make it up to here are interesting
-            chrom = sam.getrname(A.tid)
 
             if bam_out:
                 bam_out.write(A)
                 bam_out.write(B)
 
-            #if options.bwa_mem:
-                #read = A.seq
-            #else:
-                #read = A.qname.split('__')[1]
-                #if A.is_reverse:
-                    #read = rev_comp(read)                        
-                    #A,B = B,A
-                    #dist *= -1
-
-            #debug("A='%s' B='%s' dist=%d A.is_reverse=%s" % (A,B,dist,A.is_reverse))
-            if dist < 0:
+            dist = B.pos - A.aend
+            if dist <= 0:
                 # the anchors align in reversed orientation -> circRNA?
                 if options.debug:
                     print "potential circ"
-                chrom = sam.getrname(A.tid)
-                
+
+                chrom = fast_chrom_lookup(A)
                 bp = find_breakpoints(A,B,read,chrom)
                 if not bp:
                     N['circ_no_bp'] += w
@@ -809,12 +803,16 @@ if options.bwa_mem:
 
             elif dist > 0:
                 # the anchors align sequentially -> linear/normal splice junction?
-                
+                if options.nolinear:
+                    N['linear_splice_skipped'] += 1
+                    continue
+
+                chrom = fast_chrom_lookup(A)
                 bp = find_breakpoints(A,B,read,chrom)
                 if not bp:
-                    N['splice_no_bp'] += 1
+                    N['linear_splice_no_bp'] += 1
                 else:
-                    N['spliced_reads'] += 1
+                    N['linear_splice_covered'] += 1
 
                 n_hits = len(bp)
                 if bp and not options.allhits:
