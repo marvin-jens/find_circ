@@ -278,6 +278,8 @@ This will deal properly with the various columns: quality scores will be assigne
                           sites.reads from find_circ.py
     -F, --fasta           instead of unmapped reads from BAM, input is FASTA
                           file
+    -Q, --fastq           instead of unmapped reads from BAM, input is FASTQ
+                          file
 ```
 
 ### Command line reference `find_circ.py` ###
@@ -354,4 +356,5 @@ This will deal properly with the various columns: quality scores will be assigne
                             (default=0)
       -s STATS, --stats=STATS
                             write statistics to this file (instead of stderr)
+      -c, --old-input       switch on compatibility mode for old input format
 ```
