@@ -635,11 +635,11 @@ def anchors_bowtie2(sam):
         yield A,B,pair_num * 2
     
     
-def prep_bwa_mem(segments):
+def adjacent_segment_pairs(segments):
     """
-    Input is the list of primary alignments as reported by BWA MEM.
-    In the simplest case these are two alignments to two exons, with 
-    the respective parts belonging to the other exon clipped. 
+    Input is a list of primary alignments for a read as reported by BWA MEM.
+    In the simplest case these are two alignments to two exons, with the
+    parts belonging to the other exon clipped. 
     However, for longer reads these may also be split into three or 
     more segments.
     """
@@ -669,17 +669,9 @@ def prep_bwa_mem(segments):
     internal_starts = dict([( seg,aligned_start_from_cigar(seg) ) for seg in segments])
     internal_ends   = dict([( seg,internal_starts[seg] + len(seg.query) ) for seg in segments])
     
-    # sort by reference start position
-    seg_by_ref = sorted(segments,key = lambda seg : seg.pos)
-    
     # sort by internal start position
     seg_by_seq = sorted(segments,key = lambda seg: internal_starts[seg])
     
-    #if seg_by_ref == seg_by_seq:
-        ## all segments align contiguosly: linearly spliced read
-        ## TODO: exclude segments on different chromosomes/strands, etc.
-        #print "LINEAR"
-
     # iterate over consecutive pairs of segments to find the 
     # splices between them
     # [A,B,C,D] -> (A,B),(B,C),(C,D)
@@ -698,35 +690,67 @@ def prep_bwa_mem(segments):
         
         if len_a < options.asize or len_b < options.asize:
             # segment length is below required anchor length
-            if options.debug:
-                print "segment length is below required anchor length"
+            N['seg_too_short_skip'] += 1
             continue
 
         read_part = full_read[min(start_a,start_b):max(end_a,end_b)]
+        
         if options.debug:
             print "read_part",read_part
+        
+        ## anchor pairs that make it up to here are interesting
+        if bam_out:
+            bam_out.write(seg_a)
+            bam_out.write(seg_b)
+
         yield seg_a,seg_b,read_part,weight
+        
 
 def anchors_bwa_mem(sam):
+    """
+    Generator that loops over the SAM alignments. It groups alignments 
+    belonging to segments of the same original read. Pairs of adjacent 
+    segments (meaning adjacent in the reads query sequence) are yielded 
+    to be processed by the known logic for splice junction determination.
+    """
+
     last_qname = ""
-    alignments = []
+    segments = []
 
     from time import time
     t0 = time()
-    for line_num,read in enumerate(sam):
-        #print read
-        if read.qname != last_qname:
-            if len(alignments) >= 2:
-                for A,B,full_read,weight in prep_bwa_mem(alignments):
-                    yield A,B,full_read,weight,line_num
-            alignments = []
+    for line_num,align in enumerate(sam):
 
-        if alignments:
-            if read.tid != alignments[0].tid:
-                # supplementary hit is on another chromosome. Not what we're looking for!
+        if not align.is_secondary:
+            N['total_reads'] += 1
+            if align.is_unmapped:
+                N['unmapped_reads'] += 1
                 continue
-        alignments.append(read)
-        last_qname = read.qname
+            
+        N['total_segs'] += 1
+        if align.qname != last_qname:
+            # this alignment belongs to a new read
+            if len(segments) >= 2:
+                for A,B,read_part,weight in adjacent_segment_pairs(segments):
+                    yield primary,A,B,read_part,weight,line_num
+
+            else:
+                N['unspliced_reads'] += 1
+            segments = []
+
+        if segments:
+            primary = segments[0]
+            if align.tid != primary.tid:
+                # supplementary hit is on another chromosome. Not what we're looking for!
+                N['seg_other_chrom_skip'] += 1
+                continue
+
+            if align.is_reverse != primary.is_reverse:
+                N['seg_other_strand_skip'] += 1
+                continue
+
+        segments.append(align)
+        last_qname = align.qname
         
         if options.throughput:
             if line_num and not line_num % 10000:
@@ -736,9 +760,11 @@ def anchors_bwa_mem(sam):
                 rps = line_num/(t1-t0)
                 sys.stderr.write("processed {k_reads:.1f}k reads in {mins:.1f} minutes ({rps:.2f} reads/second)\n".format(**locals()))
 
-    if len(alignments) >= 2:
-        for A,B,full_read,weight in prep_bwa_mem(alignments):
-            yield A,B,full_read,weight,line_num
+    if len(segments) >= 2:
+        for A,B,read_part,weight in adjacent_segment_pairs(segments):
+            yield primary,A,B,read_part,weight,line_num
+    else:
+        N['unspliced_reads'] += 1
 
 tid_cache = {}
 def fast_chrom_lookup(read):
@@ -751,45 +777,29 @@ def fast_chrom_lookup(read):
 if options.bwa_mem:
     try:
         sam_line = 0
-        for A,B,read,w,sam_line in anchors_bwa_mem(sam):
+        for primary,A,B,read_part,w,sam_line in anchors_bwa_mem(sam):
             if options.noop:
                 continue
 
             if options.debug:
                 print A
                 print B
-            N['total'] += 1
-            if A.is_unmapped or B.is_unmapped:
-                N['unmapped'] += w
-                continue
-            if A.tid != B.tid:
-                N['other_chrom'] += w
-                continue
-            if A.is_reverse != B.is_reverse:
-                N['other_strand'] += w
-                continue
-
-            
-            if options.debug:
-                print "pair made it through initial filters"
-            ### anchor pairs that make it up to here are interesting
-
-            if bam_out:
-                bam_out.write(A)
-                bam_out.write(B)
-
+                
             dist = B.pos - A.aend
+            full_read = primary.seq
+
             if dist <= 0:
                 # the anchors align in reversed orientation -> circRNA?
                 if options.debug:
                     print "potential circ"
 
                 chrom = fast_chrom_lookup(A)
-                bp = find_breakpoints(A,B,read,chrom)
+                bp = find_breakpoints(A,B,read_part,chrom)
                 if not bp:
                     N['circ_no_bp'] += w
                 else:
-                    N['circ_reads'] += w
+                    N['circ_spliced_weighted'] += w
+                    N['circ_spliced'] += 1
 
                 n_hits = len(bp)
                 if bp and not options.allhits:
@@ -799,7 +809,7 @@ if options.bwa_mem:
                     # for some weird reason for circ we need a correction here
                     dist,ov,strandmatch,rnd,chrom,start,end,signal,sense = h
                     h = (chrom,start+1,end-1,sense)
-                    circs[h].add(read,A,B,dist,ov,strandmatch,signal,n_hits,w)
+                    circs[h].add(full_read,A,B,dist,ov,strandmatch,signal,n_hits,w)
 
             elif dist > 0:
                 # the anchors align sequentially -> linear/normal splice junction?
@@ -808,7 +818,7 @@ if options.bwa_mem:
                     continue
 
                 chrom = fast_chrom_lookup(A)
-                bp = find_breakpoints(A,B,read,chrom)
+                bp = find_breakpoints(A,B,read_part,chrom)
                 if not bp:
                     N['linear_splice_no_bp'] += 1
                 else:
@@ -822,7 +832,7 @@ if options.bwa_mem:
                     #print h
                     dist,ov,strandmatch,rnd,chrom,start,end,signal,sense = h
                     h = (chrom,start,end,sense)
-                    splices[h].add(read,A,B,dist,ov,strandmatch,signal,n_hits,w)
+                    splices[h].add(full_read,A,B,dist,ov,strandmatch,signal,n_hits,w)
                     
                     # remember the spliced reads at these sites
                     loci[(chrom,start,sense)].append(splices[h])

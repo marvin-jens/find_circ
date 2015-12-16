@@ -54,6 +54,7 @@ hek_test_out/splice_sites.bed: $(GENOME_HG19) $(INDEX_HG19).bwt hek_spliced_read
 				--name=hek_test --prefix=newhek_test_ \
 				--stats=hek_test_out/hek_test.log \
 				--reads=hek_test_out/spliced_reads.fa \
+				--throughput \
 				> hek_test_out/splice_sites.bed
 
 hek_test2: hek_test_out/splice_sites2.bed
