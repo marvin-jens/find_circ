@@ -4,7 +4,6 @@ import numpy
 import os,sys,re
 from logging import error, warning, debug
 import logging
-#logging.basicConfig(level=logging.DEBUG)
 import mmap
 import optparse
 import traceback
@@ -361,32 +360,39 @@ parser = optparse.OptionParser(usage=usage)
 parser.add_option("-v","--version",dest="version",action="store_true",default=False,help="get version information")
 parser.add_option("-S","--system",dest="system",type=str,default="",help="model system database (optional! Requires byo library.)")
 parser.add_option("-G","--genome",dest="genome",type=str,default="",help="path to genome (either a folder with chr*.fa or one multichromosome FASTA file)")
+parser.add_option("-o","--output",dest="output",default="find_circ_run",help="where to store output")
 parser.add_option("-n","--name",dest="name",default="unknown",help="tissue/sample name to use (default='unknown')")
-parser.add_option("-p","--prefix",dest="prefix",default="",help="prefix to prepend to each junction name (default='')")
-parser.add_option("-q","--min_uniq_qual",dest="min_uniq_qual",type=int,default=1,help="minimal uniqness for anchor alignments (default=2)")
+#parser.add_option("-p","--prefix",dest="prefix",default="",help="prefix to prepend to each junction name (default='')")
+parser.add_option("-q","--min-uniq-qual",dest="min_uniq_qual",type=int,default=1,help="minimal uniqness for anchor alignments (default=2)")
 parser.add_option("-a","--anchor",dest="asize",type=int,default=20,help="anchor size (default=20)")
 parser.add_option("-m","--margin",dest="margin",type=int,default=2,help="maximum nts the BP is allowed to reside inside an anchor (default=2)")
-parser.add_option("-d","--maxdist",dest="maxdist",type=int,default=2,help="maximum mismatches (no indels) allowed in anchor extensions (default=2)")
+parser.add_option("-d","--max-mismatch",dest="maxdist",type=int,default=2,help="maximum mismatches (no indels) allowed in anchor extensions (default=2)")
+parser.add_option("","--short-threshold",dest="short_threshold",type=int,default=100,help="minimal genomic span [nt] of a circRNA before it is labeled SHORT (default=100)")
+parser.add_option("","--huge-threshold",dest="huge_threshold",type=int,default=100000,help="maximal genomic span [nt] of a circRNA before it is labeled HUGE (default=100000)")
+
 
 parser.add_option("","--bwa-mem",dest="bwa_mem",default=False,action="store_true",help="Input is alignments of full length reads from BWA MEM, not BOWTIE2 anchor alignments from split reads [EXPERIMENTAL]")
 parser.add_option("","--debug",dest="debug",default=False,action="store_true",help="Activate LOTS of debug output")
 
-parser.add_option("","--noncanonical",dest="noncanonical",default=False,action="store_true",help="relax the GU/AG constraint (will produce many more ambiguous counts)")
+parser.add_option("","--non-canonical",dest="noncanonical",default=False,action="store_true",help="relax the GU/AG constraint (will produce many more ambiguous counts)")
 parser.add_option("","--randomize",dest="randomize",default=False,action="store_true",help="select randomly from tied, best, ambiguous hits")
-parser.add_option("","--allhits",dest="allhits",default=False,action="store_true",help="in case of ambiguities, report each hit")
+parser.add_option("","--all-hits",dest="allhits",default=False,action="store_true",help="in case of ambiguities, report each hit")
 parser.add_option("","--stranded",dest="stranded",default=False,action="store_true",help="use if the reads are stranded. By default it will be used as control only, use with --strandpref for breakpoint disambiguation.")
-parser.add_option("","--strandpref",dest="strandpref",default=False,action="store_true",help="prefer splice sites that match annotated direction of transcription")
-parser.add_option("","--halfunique",dest="halfunique",default=False,action="store_true",help="also report junctions where only one anchor aligns uniquely (less likely to be true)")
-parser.add_option("","--report_nobridges",dest="report_nobridges",default=False,action="store_true",help="also report junctions lacking at least a single read where both anchors, jointly align uniquely (not recommended. Much less likely to be true.)")
+parser.add_option("","--strand-pref",dest="strandpref",default=False,action="store_true",help="prefer splice sites that match annotated direction of transcription")
+parser.add_option("","--half-unique",dest="halfunique",default=False,action="store_true",help="also report junctions where only one anchor aligns uniquely (less likely to be true)")
+parser.add_option("","--report-nobridges",dest="report_nobridges",default=False,action="store_true",help="also report junctions lacking at least a single read where both anchors, jointly align uniquely (not recommended. Much less likely to be true.)")
 
-parser.add_option("-R","--reads",dest="reads",default="",help="write spliced reads to this file instead of stderr (RECOMMENDED!)")
-parser.add_option("-B","--bam",dest="bam",default="",help="filename to store anchor alignments that were recorded as linear or circular junction candidates")
+#parser.add_option("-R","--reads",dest="reads",default=False,help="write spliced reads to this file instead of stderr (RECOMMENDED!)")
+parser.add_option("-B","--bam",dest="bam",default=False,action="store_true",help="store anchor alignments that were recorded as linear or circular junction candidates")
+
 parser.add_option("-r","--reads2samples",dest="reads2samples",default="",help="path to tab-separated two-column file with read-name prefix -> sample ID mapping")
-parser.add_option("-s","--stats",dest="stats",default="runstats.log",help="write numeric statistics on the run to this file")
 parser.add_option("-t","--throughput",dest="throughput",default=False,action="store_true",help="print information on throughput to stderr (useful for benchmarking)")
+parser.add_option("","--chunk-size",dest="chunksize",type=int,default=10000,help="number of reads to be processed in one chunk (default=10000)")
 parser.add_option("","--noop",dest="noop",default=False,action="store_true",help="Do not search for any junctions. Only process the alignment stream (useful for benchmarking)")
-parser.add_option("","--nolinear",dest="nolinear",default=False,action="store_true",help="Do not search for linear junctions, only circular (saves some time)")
+parser.add_option("","--no-linear",dest="nolinear",default=False,action="store_true",help="Do not search for linear junctions, only circular (saves some time)")
 options,args = parser.parse_args()
+
+
 
 if options.version:
     print """find_circ.py version 1.2\n\n(c) Marvin Jens 2012-2015.\nCheck http://www.circbase.org for more information."""
@@ -415,12 +421,19 @@ if options.reads2samples:
 else:
     samples = []
 
-if options.reads:
-    readfile = file(options.reads,"w")
-else:
-    readfile = sys.stderr
-
 samples.append(('',options.name))
+
+# prepare output files
+if not os.path.isdir(options.output):
+    os.mkdir(options.output)
+
+sites_file = file(os.path.join(options.output,"splice_sites.bed"),"w")
+reads_file = file(os.path.join(options.output,"spliced_reads.fa"),"w")
+stats_file = file(os.path.join(options.output,"stats.log"),"w")
+logging.basicConfig(level=logging.INFO,filename=os.path.join(options.output,"run.log"))
+if options.bam:
+    bam_filename = os.path.join(options.output,"spliced_alignments.bam")
+
     
 from collections import defaultdict
 
@@ -626,7 +639,7 @@ def find_breakpoints(A,B,read,chrom,margin=options.margin,maxdist=options.maxdis
     
 sam = pysam.Samfile('-','r')
 if options.bam:
-    bam_out = pysam.Samfile(options.bam,'wb',template=sam)
+    bam_out = pysam.Samfile(bam_filename,'wb',template=sam)
 else:
     bam_out = None
 
@@ -719,6 +732,7 @@ def anchors_bwa_mem(sam):
 
     from time import time
     t0 = time()
+    t_last = t0
     for line_num,align in enumerate(sam):
 
         if not align.is_secondary:
@@ -753,12 +767,13 @@ def anchors_bwa_mem(sam):
         last_qname = align.qname
         
         if options.throughput:
-            if line_num and not line_num % 10000:
+            if line_num and not line_num % options.chunksize:
                 t1 = time()
                 k_reads = line_num / 1000.
                 mins = (t1 - t0)/60.
-                rps = line_num/(t1-t0)
+                rps = float(options.chunksize)/(t1-t_last)
                 sys.stderr.write("processed {k_reads:.1f}k reads in {mins:.1f} minutes ({rps:.2f} reads/second)\n".format(**locals()))
+                t_last = t1
 
     if len(segments) >= 2:
         for A,B,read_part,weight in adjacent_segment_pairs(segments):
@@ -851,108 +866,9 @@ if options.bwa_mem:
         traceback.print_exc(file=sys.stderr)
         sys.exit(1)
     
-    
-    
-else:
-    try:
-        for A,B,sam_line in anchors_bowtie2(sam):
-            if options.debug:
-                print A
-                print B
-            N['total'] += 1
-            if A.is_unmapped or B.is_unmapped:
-                N['unmapped'] += 1
-                continue
-            if A.tid != B.tid:
-                N['other_chrom'] += 1
-                continue
-            if A.is_reverse != B.is_reverse:
-                N['other_strand'] += 1
-                continue
-
-            dist = B.pos - A.pos
-            if numpy.abs(dist) < options.asize:
-                N['overlapping_anchors'] += 1
-                continue
-            
-            ### anchor pairs that make it up to here are interesting
-            if bam_out:
-                bam_out.write(A)
-                bam_out.write(B)
-
-            #debug("A='%s' B='%s' dist=%d A.is_reverse=%s" % (A,B,dist,A.is_reverse))
-            if (A.is_reverse and dist > 0) or (not A.is_reverse and dist < 0):
-                # the anchors align in reversed orientation -> circRNA?
-                
-                read = A.qname.split('__')[1]
-                chrom = sam.getrname(A.tid)
-                
-                if A.is_reverse:
-                    #print "ISREVERSE"
-                    A,B = B,A
-                    read = rev_comp(read)
-                                
-                bp = find_breakpoints(A,B,read,chrom)
-                if not bp:
-                    N['circ_no_bp'] += 1
-                else:
-                    N['circ_reads'] += 1
-
-                n_hits = len(bp)
-                if bp and not options.allhits:
-                    bp = [bp[0],]
-
-                for h in bp:
-                    # for some weird reason for circ we need a correction here
-                    dist,ov,strandmatch,rnd,chrom,start,end,signal,sense = h
-                    h = (chrom,start+1,end-1,sense)
-                    circs[h].add(read,A,B,dist,ov,strandmatch,signal,n_hits)
-
-            elif (A.is_reverse and dist < 0) or (not A.is_reverse and dist > 0):
-                # the anchors align sequentially -> linear/normal splice junction?
-                read = A.qname.split('__')[1]
-                chrom = sam.getrname(A.tid)
-                
-                if A.is_reverse:
-                    #print "ISREVERSE"
-                    A,B = B,A
-                    read = rev_comp(read)
-                                
-                bp = find_breakpoints(A,B,read,chrom)
-                if not bp:
-                    N['splice_no_bp'] += 1
-                else:
-                    N['spliced_reads'] += 1
-                n_hits = len(bp)
-                if bp and not options.allhits:
-                    bp = [bp[0],]
-                
-                for h in bp:
-                    #print h
-                    dist,ov,strandmatch,rnd,chrom,start,end,signal,sense = h
-                    h = (chrom,start,end,sense)
-                    splices[h].add(read,A,B,dist,ov,strandmatch,signal,n_hits)
-                    
-                    # remember the spliced reads at these sites
-                    loci[(chrom,start,sense)].append(splices[h])
-                    loci[(chrom,end,sense)].append(splices[h])
-            else:
-                N['fallout'] += 1
-                warning("unhandled read: A='%s' B='%s'" % (A,B))
-                
-    except KeyboardInterrupt:
-        fastq_line = sam_line * 4
-
-        logging.warning("KeyboardInterrupt by user while processing input starting at SAM line {sam_line}, FASTQ line {fastq_line}".format(**locals()))
-    except:        
-        fastq_line = sam_line * 4
-
-        logging.error("Unhandled exception raised while processing input starting at SAM line {sam_line}, FASTQ line {fastq_line}".format(**locals()))
-        traceback.print_exc(file=sys.stderr)
-        sys.exit(1)
 
 def output(cand,prefix):
-    print "#","\t".join(['chrom','start','end','name','counts','strand','n_spanned','n_uniq','uniq_bridges','best_qual_left','best_qual_right','tissues','tiss_counts','edits','anchor_overlap','breakpoints','signal','strandmatch','category'])
+    sites_file.write("#" + "\t".join(['chrom','start','end','name','counts','strand','n_spanned','n_uniq','uniq_bridges','best_qual_left','best_qual_right','tissues','tiss_counts','edits','anchor_overlap','breakpoints','signal','strandmatch','category']) + "\n")
     n = 1
     for c,hit in cand.items():
         #print c,hit
@@ -974,11 +890,11 @@ def output(cand,prefix):
                 continue
 
         #print N
-        name = "%s%s_%06d" % (options.prefix,prefix,n)
+        name = "%s_%s_%06d" % (options.name,prefix,n)
         n += 1
         #sys.stderr.write("%s\t%s\n" % (name,"\t".join(sorted(reads))))
         for r_seq,ori_name in zip(hit.reads,hit.readnames):
-            readfile.write(">%s %s\n%s\n" % (ori_name,name,r_seq))
+            reads_file.write(">%s %s\n%s\n" % (ori_name,name,r_seq))
       
         categories = []
         if signal == "GTAG":
@@ -1006,14 +922,17 @@ def output(cand,prefix):
         else:
             categories.append("LINEAR")
 
+        if end-start < options.short_threshold:
+            categories.append("SHORT")
+        elif end-start > options.huge_threshold:
+            categories.append("HUGE")
 
         bed = [
             chrom,start-1,end,name,counts,sense,n_spanned,n_uniq,uniq_bridges,best_qual_A,best_qual_B,",".join(tissues),",".join(tiss_counts),min_edit,min_anchor_ov,n_hits,signal,strandmatch,",".join(sorted(categories))
         ]
-        print "\t".join([str(b) for b in bed])
+        sites_file.write("\t".join([str(b) for b in bed]) + "\n")
 
-stats = file(options.stats,"w")
-stats.write(str(N)+"\n")
+stats_file.write(str(N)+"\n")
 
 output(circs,"circ")
 output(splices,"norm")

@@ -51,11 +51,8 @@ hek_test_out/splice_sites.bed: $(GENOME_HG19) $(INDEX_HG19).bwt hek_spliced_read
 	mkdir -p hek_test_out
 	bwa mem -t16 -A2 -B10 -k 15 -T 1 $(INDEX_HG19) hek_spliced_reads.fa | \
 			../find_circ.py --bwa-mem --genome $(GENOME_HG19) \
-				--name=hek_test --prefix=newhek_test_ \
-				--stats=hek_test_out/hek_test.log \
-				--reads=hek_test_out/spliced_reads.fa \
+				--name=hek_test --output=hek_test_out \
 				--throughput \
-				> hek_test_out/splice_sites.bed
 
 hek_test2: hek_test_out/splice_sites2.bed
 	@printf "\n>>> comparing new results to previous result.\n\n"
