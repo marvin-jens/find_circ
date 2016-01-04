@@ -372,12 +372,13 @@ parser.add_option("","--huge-threshold",dest="huge_threshold",type=int,default=1
 
 
 parser.add_option("","--bwa-mem",dest="bwa_mem",default=False,action="store_true",help="Input is alignments of full length reads from BWA MEM, not BOWTIE2 anchor alignments from split reads [EXPERIMENTAL]")
+parser.add_option("","--paired-end",dest="paired_end",default=False,action="store_true",help="Input are paired-end alignments. Requires --bwa-mem [EXPERIMENTAL]")
 parser.add_option("","--debug",dest="debug",default=False,action="store_true",help="Activate LOTS of debug output")
 
 parser.add_option("","--non-canonical",dest="noncanonical",default=False,action="store_true",help="relax the GU/AG constraint (will produce many more ambiguous counts)")
 parser.add_option("","--randomize",dest="randomize",default=False,action="store_true",help="select randomly from tied, best, ambiguous hits")
 parser.add_option("","--all-hits",dest="allhits",default=False,action="store_true",help="in case of ambiguities, report each hit")
-parser.add_option("","--stranded",dest="stranded",default=False,action="store_true",help="use if the reads are stranded. By default it will be used as control only, use with --strandpref for breakpoint disambiguation.")
+parser.add_option("","--stranded",dest="stranded",default=False,action="store_true",help="use if the reads are stranded. By default it will be used as control only, use with --strand-pref for breakpoint disambiguation.")
 parser.add_option("","--strand-pref",dest="strandpref",default=False,action="store_true",help="prefer splice sites that match annotated direction of transcription")
 parser.add_option("","--half-unique",dest="halfunique",default=False,action="store_true",help="also report junctions where only one anchor aligns uniquely (less likely to be true)")
 parser.add_option("","--report-nobridges",dest="report_nobridges",default=False,action="store_true",help="also report junctions lacking at least a single read where both anchors, jointly align uniquely (not recommended. Much less likely to be true.)")
@@ -385,7 +386,6 @@ parser.add_option("","--report-nobridges",dest="report_nobridges",default=False,
 #parser.add_option("-R","--reads",dest="reads",default=False,help="write spliced reads to this file instead of stderr (RECOMMENDED!)")
 parser.add_option("-B","--bam",dest="bam",default=False,action="store_true",help="store anchor alignments that were recorded as linear or circular junction candidates")
 
-parser.add_option("-r","--reads2samples",dest="reads2samples",default="",help="path to tab-separated two-column file with read-name prefix -> sample ID mapping")
 parser.add_option("-t","--throughput",dest="throughput",default=False,action="store_true",help="print information on throughput to stderr (useful for benchmarking)")
 parser.add_option("","--chunk-size",dest="chunksize",type=int,default=10000,help="number of reads to be processed in one chunk (default=10000)")
 parser.add_option("","--noop",dest="noop",default=False,action="store_true",help="Do not search for any junctions. Only process the alignment stream (useful for benchmarking)")
@@ -415,13 +415,6 @@ def grouper(n, iterable, fillvalue=None):
     "grouper(3, 'ABCDEFG', 'x') --> ABC DEF Gxx"
     args = [iter(iterable)] * n
     return izip_longest(fillvalue=fillvalue, *args)
-
-if options.reads2samples:
-    samples = [line.rstrip().split('\t') for line in file(options.reads2samples)]
-else:
-    samples = []
-
-samples.append(('',options.name))
 
 # prepare output files
 if not os.path.isdir(options.output):
@@ -499,13 +492,7 @@ class Hit(object):
             self.strand_plus += weight
             self.reads.append(read)
 
-        # identify the tissue/sample it came from
         sample_name = options.name
-        for (prefix,tiss) in samples:
-            if qname.startswith(prefix):
-                sample_name = tiss
-                break
-
         self.tissues[sample_name] += weight
         
         self.uniq.add((read,sample_name))
@@ -719,7 +706,7 @@ def adjacent_segment_pairs(segments):
         yield seg_a,seg_b,read_part,weight
         
 
-def anchors_bwa_mem(sam):
+def collected_bwa_mem_segments(sam):
     """
     Generator that loops over the SAM alignments. It groups alignments 
     belonging to segments of the same original read. Pairs of adjacent 
@@ -734,6 +721,10 @@ def anchors_bwa_mem(sam):
     t0 = time()
     t_last = t0
     for line_num,align in enumerate(sam):
+
+        if options.paired_end and align.is_read2:
+            # quick'n'dirty hack to make paired-end aware
+            align.qname += "_mate"
 
         if not align.is_secondary:
             N['total_reads'] += 1
@@ -792,7 +783,7 @@ def fast_chrom_lookup(read):
 if options.bwa_mem:
     try:
         sam_line = 0
-        for primary,A,B,read_part,w,sam_line in anchors_bwa_mem(sam):
+        for primary,A,B,read_part,w,sam_line in collected_bwa_mem_segments(sam):
             if options.noop:
                 continue
 
