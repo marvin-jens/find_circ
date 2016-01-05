@@ -736,8 +736,7 @@ def collected_bwa_mem_segments(sam):
         if align.qname != last_qname:
             # this alignment belongs to a new read
             if len(segments) >= 2:
-                for A,B,read_part,weight in adjacent_segment_pairs(segments):
-                    yield primary,A,B,read_part,weight,line_num
+                yield line_num,primary,segments
 
             else:
                 N['unspliced_reads'] += 1
@@ -767,8 +766,7 @@ def collected_bwa_mem_segments(sam):
                 t_last = t1
 
     if len(segments) >= 2:
-        for A,B,read_part,weight in adjacent_segment_pairs(segments):
-            yield primary,A,B,read_part,weight,line_num
+        yield line_num,primary,segments
     else:
         N['unspliced_reads'] += 1
 
@@ -783,69 +781,70 @@ def fast_chrom_lookup(read):
 if options.bwa_mem:
     try:
         sam_line = 0
-        for primary,A,B,read_part,w,sam_line in collected_bwa_mem_segments(sam):
-            if options.noop:
-                continue
-
-            if options.debug:
-                print A
-                print B
-                
-            dist = B.pos - A.aend
-            full_read = primary.seq
-
-            if dist <= 0:
-                # the anchors align in reversed orientation -> circRNA?
-                if options.debug:
-                    print "potential circ"
-
-                chrom = fast_chrom_lookup(A)
-                bp = find_breakpoints(A,B,read_part,chrom)
-                if not bp:
-                    N['circ_no_bp'] += w
-                else:
-                    N['circ_spliced_weighted'] += w
-                    N['circ_spliced'] += 1
-
-                n_hits = len(bp)
-                if bp and not options.allhits:
-                    bp = [bp[0],]
-
-                for h in bp:
-                    # for some weird reason for circ we need a correction here
-                    dist,ov,strandmatch,rnd,chrom,start,end,signal,sense = h
-                    h = (chrom,start+1,end-1,sense)
-                    circs[h].add(full_read,A,B,dist,ov,strandmatch,signal,n_hits,w)
-
-            elif dist > 0:
-                # the anchors align sequentially -> linear/normal splice junction?
-                if options.nolinear:
-                    N['linear_splice_skipped'] += 1
+        for sam_line,primary,segments in collected_bwa_mem_segments(sam):
+            for A,B,read_part,w in adjacent_segment_pairs(segments):
+                if options.noop:
                     continue
 
-                chrom = fast_chrom_lookup(A)
-                bp = find_breakpoints(A,B,read_part,chrom)
-                if not bp:
-                    N['linear_splice_no_bp'] += 1
-                else:
-                    N['linear_splice_covered'] += 1
-
-                n_hits = len(bp)
-                if bp and not options.allhits:
-                    bp = [bp[0],]
-                
-                for h in bp:
-                    #print h
-                    dist,ov,strandmatch,rnd,chrom,start,end,signal,sense = h
-                    h = (chrom,start,end,sense)
-                    splices[h].add(full_read,A,B,dist,ov,strandmatch,signal,n_hits,w)
+                if options.debug:
+                    print A
+                    print B
                     
-                    # remember the spliced reads at these sites
-                    loci[(chrom,start,sense)].append(splices[h])
-                    loci[(chrom,end,sense)].append(splices[h])
-            else:
-                N['fallout'] += 1
-                warning("unhandled read: A='%s' B='%s'" % (A,B))
+                dist = B.pos - A.aend
+                full_read = primary.seq
+
+                if dist <= 0:
+                    # the anchors align in reversed orientation -> circRNA?
+                    if options.debug:
+                        print "potential circ"
+
+                    chrom = fast_chrom_lookup(A)
+                    bp = find_breakpoints(A,B,read_part,chrom)
+                    if not bp:
+                        N['circ_no_bp'] += w
+                    else:
+                        N['circ_spliced_weighted'] += w
+                        N['circ_spliced'] += 1
+
+                    n_hits = len(bp)
+                    if bp and not options.allhits:
+                        bp = [bp[0],]
+
+                    for h in bp:
+                        # for some weird reason for circ we need a correction here
+                        dist,ov,strandmatch,rnd,chrom,start,end,signal,sense = h
+                        h = (chrom,start+1,end-1,sense)
+                        circs[h].add(full_read,A,B,dist,ov,strandmatch,signal,n_hits,w)
+
+                elif dist > 0:
+                    # the anchors align sequentially -> linear/normal splice junction?
+                    if options.nolinear:
+                        N['linear_splice_skipped'] += 1
+                        continue
+
+                    chrom = fast_chrom_lookup(A)
+                    bp = find_breakpoints(A,B,read_part,chrom)
+                    if not bp:
+                        N['linear_splice_no_bp'] += 1
+                    else:
+                        N['linear_splice_covered'] += 1
+
+                    n_hits = len(bp)
+                    if bp and not options.allhits:
+                        bp = [bp[0],]
+                    
+                    for h in bp:
+                        #print h
+                        dist,ov,strandmatch,rnd,chrom,start,end,signal,sense = h
+                        h = (chrom,start,end,sense)
+                        splices[h].add(full_read,A,B,dist,ov,strandmatch,signal,n_hits,w)
+                        
+                        # remember the spliced reads at these sites
+                        loci[(chrom,start,sense)].append(splices[h])
+                        loci[(chrom,end,sense)].append(splices[h])
+                else:
+                    N['fallout'] += 1
+                    warning("unhandled read: A='%s' B='%s'" % (A,B))
     except KeyboardInterrupt:
         fastq_line = sam_line * 4
 
