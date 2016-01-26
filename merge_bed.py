@@ -47,7 +47,7 @@ def read_to_hash(fname,ds=0,de=0,flank=0,cover=False):
 N = defaultdict(int)
 
 inputs = [read_to_hash(a,flank=0) for a in args]
-names = [os.path.basename(a) for a in args]
+names = [os.path.abspath(a) for a in args]
 
 by_name = dict(zip(names,inputs))
 merge = {}
