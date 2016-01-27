@@ -637,19 +637,22 @@ def anchors_bowtie2(sam):
     
 def adjacent_segment_pairs(segments):
     """
-    Input is a list of primary alignments for a read as reported by BWA MEM.
+    This generator yields pairs of adjacent segments (meaning adjacent in 
+    the reads query sequence) to be processed by the known logic for splice 
+    junction determination.
+    Input is a list of segment alignments for a read as reported by BWA MEM.
     In the simplest case these are two alignments to two exons, with the
-    parts belonging to the other exon clipped. 
-    However, for longer reads these may also be split into three or 
+    parts belonging to the other exon clipped.
+    However, for longer reads these may also be split into three or
     more segments.
     """
 
-    # the first BWA reported alignment for a read always contains the 
+    # the first BWA reported alignment for a read always contains the
     # full, original read sequence
     full_read = segments[0].seq
     
-    # weight to assign to each splice. Now that a read can contain multiple 
-    # splices (or a circRNA read even the same splice multiple times), we 
+    # weight to assign to each splice. Now that a read can contain multiple
+    # splices (or a circRNA read even the same splice multiple times), we
     # do not want to overcount.
     weight = 1./(len(segments)-1.)
     
@@ -709,9 +712,7 @@ def adjacent_segment_pairs(segments):
 def collected_bwa_mem_segments(sam):
     """
     Generator that loops over the SAM alignments. It groups alignments 
-    belonging to segments of the same original read. Pairs of adjacent 
-    segments (meaning adjacent in the reads query sequence) are yielded 
-    to be processed by the known logic for splice junction determination.
+    belonging to segments of the same original read. 
     """
 
     last_qname = ""
