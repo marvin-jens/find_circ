@@ -514,8 +514,8 @@ class Hit(object):
                 
         
 loci = defaultdict(list)
-circs = defaultdict(Hit)
-splices = defaultdict(Hit)
+circ_splices = defaultdict(Hit)
+linear_splices = defaultdict(Hit)
 
 N = defaultdict(float)
 
@@ -736,11 +736,8 @@ def collected_bwa_mem_segments(sam):
         N['total_segs'] += 1
         if align.qname != last_qname:
             # this alignment belongs to a new read
-            if len(segments) >= 2:
-                yield line_num,primary,segments
-
-            else:
-                N['unspliced_reads'] += 1
+            if segments:
+                yield line_num,segments
             segments = []
 
         if segments:
@@ -748,10 +745,12 @@ def collected_bwa_mem_segments(sam):
             if align.tid != primary.tid:
                 # supplementary hit is on another chromosome. Not what we're looking for!
                 N['seg_other_chrom_skip'] += 1
+                #print 'seg_other_chrom_skip'
                 continue
 
             if align.is_reverse != primary.is_reverse:
                 N['seg_other_strand_skip'] += 1
+                #print 'seg_other_strand_skip'
                 continue
 
         segments.append(align)
@@ -766,10 +765,8 @@ def collected_bwa_mem_segments(sam):
                 sys.stderr.write("processed {k_reads:.1f}k reads in {mins:.1f} minutes ({rps:.2f} reads/second)\n".format(**locals()))
                 t_last = t1
 
-    if len(segments) >= 2:
-        yield line_num,primary,segments
-    else:
-        N['unspliced_reads'] += 1
+    if segments:
+        yield line_num, segments
 
 tid_cache = {}
 def fast_chrom_lookup(read):
@@ -778,11 +775,104 @@ def fast_chrom_lookup(read):
         tid_cache[tid] = sam.getrname(tid)
 
     return tid_cache[tid]
-        
+
+def record_hits(frag_circ_splices, frag_linear_splices, frag_unspliced):
+    """
+    This function processes the observed splicing events from a single 
+    sequenced fragment (mate pair, or single end read). Long reads, or
+    mate pairs can span more than one junction, thus revealing information
+    on the internal structure of a circRNA. 
+    record_hits() extracts and reports this information.
+    """
+    global circ_splices, linear_splices
+    
+    circ_junctions = set()
+    lin_junctions = set()
+    unspliced = set()
+    
+    print "record_hits()"
+    for (chrom,start,end,sense,primary,full_read,A,B,dist,ov,strandmatch,signal,n_hits,w) in frag_circ_splices:
+        print "circ",primary.qname,primary.is_read1,primary.is_read2
+        key = (chrom,start,end,sense)
+        print key
+        circ_splices[key].add(full_read,A,B,dist,ov,strandmatch,signal,n_hits,w)
+        circ_junctions.add(key)
+    
+    for (chrom,start,end,sense,primary,full_read,A,B,dist,ov,strandmatch,signal,n_hits,w) in frag_linear_splices:
+        print "linear",primary.qname,primary.is_read1,primary.is_read2
+        key = (chrom,start,end,sense)
+        print key
+        linear_splices[key].add(full_read,A,B,dist,ov,strandmatch,signal,n_hits,w)
+        lin_junctions.add(key)
+    
+    for primary in frag_unspliced:
+        if primary.is_reverse:
+            sense = '-'
+        else:
+            sense = '+'
+            
+        key = fast_chrom_lookup(primary),primary.pos,primary.aend,sense
+        print "unspliced",primary.qname,primary.is_read1,primary.is_read2
+        print key
+        unspliced.add(key)
+
+    if not circ_junctions:
+        return
+
+    if len(circ_junctions) > 1:
+        for key in circ_junctions:
+            circ_splices[key].add_flag('WARN_MULTI_BACKSPLICE')
+        return
+
+    # we are sure now, that there is exactly one circ junction in the fragment.
+    circ_key = circ_junctions.pop()
+    circ_chrom,circ_start,circ_end,circ_sense = circ_key
+    circ_hit = circ_splices[circ_key]
+    
+    # test if (existing) unspliced reads fall within the circ
+    # allow for [anchor-length] nucleotides to lie outside, as these may simply
+    # have failed to be soft-clipped/spliced.
+    for chrom,start,end,sense in unspliced:
+        if start + options.anchor <= circ_start or end - options.anchor >= circ_end:
+            circ_hit.add_flag('WARN_OUTSIDE_UNSPLICED_READ')
+        else:
+            circ_hit.add_flag('SUPPORT_INSIDE_UNSPLICED_READ')
+
+    for chrom,start,end,sense in lin_junctions:
+        if start <= circ_start or end >= circ_end:
+            circ_hit.add_flag('WARN_OUTSIDE_LINEAR_SPLICED_READ')
+        else:
+            circ_hit.add_flag('SUPPORT_INSIDE_LINEAR_SPLICED_READ')
+
+    
 if options.bwa_mem:
     try:
         sam_line = 0
-        for sam_line,primary,segments in collected_bwa_mem_segments(sam):
+        last_first_mate = ""
+
+        frag_circ_splices = []
+        frag_linear_splices = []
+        frag_unspliced = []
+        
+        for sam_line,segments in collected_bwa_mem_segments(sam):
+            primary = segments[0]
+            if primary.is_read1 or primary.qname != last_first_mate + "_mate":
+                # we switched to a new mate pair/single end read
+                if frag_circ_splices or frag_linear_splices:
+                    record_hits(frag_circ_splices,frag_linear_splices,frag_unspliced)
+                    
+                frag_circ_splices = []
+                frag_linear_splices = []
+                frag_unspliced = []
+            
+            if primary.is_read1:
+                last_first_mate = primary.qname
+
+            if len(segments) < 2:
+                N['unspliced_reads'] += 1
+                frag_unspliced.append(primary)
+                continue
+
             for A,B,read_part,w in adjacent_segment_pairs(segments):
                 if options.noop:
                     continue
@@ -811,11 +901,12 @@ if options.bwa_mem:
                     if bp and not options.allhits:
                         bp = [bp[0],]
 
-                    for h in bp:
+                    for dist,ov,strandmatch,rnd,chrom,start,end,signal,sense in bp:
                         # for some weird reason for circ we need a correction here
-                        dist,ov,strandmatch,rnd,chrom,start,end,signal,sense = h
-                        h = (chrom,start+1,end-1,sense)
-                        circs[h].add(full_read,A,B,dist,ov,strandmatch,signal,n_hits,w)
+                        start += 1
+                        end -+ 1
+                        frag_circ_splices.append( (chrom,start,end,sense,primary,full_read,A,B,dist,ov,strandmatch,signal,n_hits,w) )
+
 
                 elif dist > 0:
                     # the anchors align sequentially -> linear/normal splice junction?
@@ -834,15 +925,13 @@ if options.bwa_mem:
                     if bp and not options.allhits:
                         bp = [bp[0],]
                     
-                    for h in bp:
-                        #print h
-                        dist,ov,strandmatch,rnd,chrom,start,end,signal,sense = h
-                        h = (chrom,start,end,sense)
-                        splices[h].add(full_read,A,B,dist,ov,strandmatch,signal,n_hits,w)
-                        
+                    for dist,ov,strandmatch,rnd,chrom,start,end,signal,sense in bp:
+                        frag_linear_splices.append( (chrom,start,end,sense,primary,full_read,A,B,dist,ov,strandmatch,signal,n_hits,w) )
+
+                        key = (chrom,start,end,sense)
                         # remember the spliced reads at these sites
-                        loci[(chrom,start,sense)].append(splices[h])
-                        loci[(chrom,end,sense)].append(splices[h])
+                        loci[(chrom,start,sense)].append(linear_splices[key])
+                        loci[(chrom,end,sense)].append(linear_splices[key])
                 else:
                     N['fallout'] += 1
                     warning("unhandled read: A='%s' B='%s'" % (A,B))
@@ -925,5 +1014,5 @@ def output(cand,prefix):
 
 stats_file.write(str(N)+"\n")
 
-output(circs,"circ")
-output(splices,"norm")
+output(circ_splices,"circ")
+output(linear_splices,"norm")
