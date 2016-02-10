@@ -1,10 +1,12 @@
 #!/usr/bin/env python
-import pysam
-import numpy as np
 import os,sys,re
-from logging import error, warning, debug
-import logging
+from collections import defaultdict
+import numpy as np
+from numpy import chararray as carray
+from numpy import fromstring,byte
 import mmap
+import logging
+import pysam
 import optparse
 import traceback
 
@@ -76,6 +78,7 @@ class mmap_fasta(object):
 
 class indexed_fasta(object):
     def __init__(self,fname,split_chrom="",**kwargs):
+        self.logger = logging.getLogger("indexed_fasta")
         self.fname = fname
         self.chrom_stats = {}
         self.split_chrom = split_chrom
@@ -91,7 +94,7 @@ class indexed_fasta(object):
         self.mmap = mmap.mmap(f.fileno(),0,prot=mmap.PROT_READ)
 
     def index(self):
-        debug("# indexed_fasta.index('%s')" % self.fname)
+        self.logger.info("# indexed_fasta.index('%s')" % self.fname)
 
         ofs = 0
         f = file(self.fname)
@@ -128,7 +131,7 @@ class indexed_fasta(object):
         f.close()
 
     def store_index(self,ipath):
-        debug("# indexed_fasta.store_index('%s')" % ipath)
+        self.logger.info("# indexed_fasta.store_index('%s')" % ipath)
         
         # write to tmp-file first and in the end rename in order to have this atomic 
         # otherwise parallel building of the same index may screw it up.
@@ -153,7 +156,7 @@ class indexed_fasta(object):
         
 
     def load_index(self,ipath):
-        debug("# indexed_fasta.load_index('%s')" % ipath)
+        self.logger.info("# indexed_fasta.load_index('%s')" % ipath)
         self.chrom_stats = {}
         for line in file(ipath):
             chrom,ofs,ldata,skip,skipchar,size = line.rstrip().split('\t')
@@ -212,12 +215,6 @@ class Accessor(object):
     def flush(self):
         pass
 
-def to_bool(obj):
-    if obj == "False":
-        return False
-    else:
-        return bool(obj)
-        
 class Track(object):
     """
     Abstraction of chromosome-wide adressable data like sequences, coverage, scores etc.
@@ -235,7 +232,7 @@ class Track(object):
         self.acc_cache = {}
         self.accessor = accessor
         self.kwargs = kwargs
-        self.sense_specific = to_bool(sense_specific)
+        self.sense_specific = sense_specific
         self.dim = int(dim)
         self.description = description
         self.auto_flush = auto_flush
@@ -304,12 +301,12 @@ class Track(object):
             return chrom+sense
         else:
             return chrom
-
         
 class GenomeAccessor(Accessor):
     def __init__(self,path,chrom,sense,system='hg19',**kwargs):
         super(GenomeAccessor,self).__init__(path,chrom,sense,system=system,**kwargs)
-        debug("# GenomeAccessor mmap: Loading genomic sequence for chromosome %s from '%s'" % (chrom,path))
+        self.logger = logging.getLogger("GenomeAccessor")
+        self.logger.info("# mmap: Loading genomic sequence for chromosome %s from '%s'" % (chrom,path))
 
         self.system = system
         self.data = None
@@ -317,7 +314,7 @@ class GenomeAccessor(Accessor):
         try:
             self.data = indexed_fasta(fname)
         except IOError:
-            warning("Could not access '%s'. Switching to dummy mode (only Ns)" % fname)
+            self.logger.warning("Could not access '%s'. Switching to dummy mode (only Ns)" % fname)
                 
             self.get_data = self.get_dummy
             self.get_oriented = self.get_dummy
@@ -352,8 +349,11 @@ class GenomeAccessor(Accessor):
 
 
 usage = """
-
-   bowtie2 [mapping options] anchors.fastq.gz | %prog [options] > candidates.bed
+   bwa mem -t<threads> [-p] -A2 -B10 -k 15 -T 1 $GENOME_INDEX reads.fastq.gz | %prog [options]
+   
+   OR:
+   
+   %prog [options] <bwa_mem_genome_alignments.bam>
 """
 
 parser = optparse.OptionParser(usage=usage)
@@ -364,15 +364,11 @@ parser.add_option("-o","--output",dest="output",default="find_circ_run",help="wh
 parser.add_option("-n","--name",dest="name",default="unknown",help="tissue/sample name to use (default='unknown')")
 #parser.add_option("-p","--prefix",dest="prefix",default="",help="prefix to prepend to each junction name (default='')")
 parser.add_option("-q","--min-uniq-qual",dest="min_uniq_qual",type=int,default=1,help="minimal uniqness for anchor alignments (default=2)")
-parser.add_option("-a","--anchor",dest="asize",type=int,default=20,help="anchor size (default=20)")
-parser.add_option("-m","--margin",dest="margin",type=int,default=2,help="maximum nts the BP is allowed to reside inside an anchor (default=2)")
-parser.add_option("-d","--max-mismatch",dest="maxdist",type=int,default=2,help="maximum mismatches (no indels) allowed in anchor extensions (default=2)")
+parser.add_option("-a","--anchor",dest="asize",type=int,default=15,help="anchor size (default=15)")
+parser.add_option("-m","--margin",dest="margin",type=int,default=2,help="maximum nts the BP is allowed to reside within a segment (default=2)")
+parser.add_option("-d","--max-mismatch",dest="maxdist",type=int,default=2,help="maximum mismatches (no indels) allowed in segment extensions (default=2)")
 parser.add_option("","--short-threshold",dest="short_threshold",type=int,default=100,help="minimal genomic span [nt] of a circRNA before it is labeled SHORT (default=100)")
 parser.add_option("","--huge-threshold",dest="huge_threshold",type=int,default=100000,help="maximal genomic span [nt] of a circRNA before it is labeled HUGE (default=100000)")
-
-
-parser.add_option("","--bwa-mem",dest="bwa_mem",default=False,action="store_true",help="Input is alignments of full length reads from BWA MEM, not BOWTIE2 anchor alignments from split reads [EXPERIMENTAL]")
-parser.add_option("","--paired-end",dest="paired_end",default=False,action="store_true",help="Input are paired-end alignments. Requires --bwa-mem [EXPERIMENTAL]")
 parser.add_option("","--debug",dest="debug",default=False,action="store_true",help="Activate LOTS of debug output")
 
 parser.add_option("","--non-canonical",dest="noncanonical",default=False,action="store_true",help="relax the GU/AG constraint (will produce many more ambiguous counts)")
@@ -389,13 +385,13 @@ parser.add_option("-B","--bam",dest="bam",default=False,action="store_true",help
 parser.add_option("-t","--throughput",dest="throughput",default=False,action="store_true",help="print information on throughput to stderr (useful for benchmarking)")
 parser.add_option("","--chunk-size",dest="chunksize",type=int,default=100000,help="number of reads to be processed in one chunk (default=100000)")
 parser.add_option("","--noop",dest="noop",default=False,action="store_true",help="Do not search for any junctions. Only process the alignment stream (useful for benchmarking)")
-parser.add_option("","--no-linear",dest="nolinear",default=False,action="store_true",help="Do not search for linear junctions, only circular (saves some time)")
+parser.add_option("","--no-linear",dest="nolinear",default=False,action="store_true",help="Do not investigate linear junctions, unless associated with another backsplice event (saves some time)")
 options,args = parser.parse_args()
 
 
 
 if options.version:
-    print """find_circ.py version 1.2\n\n(c) Marvin Jens 2012-2015.\nCheck http://www.circbase.org for more information."""
+    print """find_circ.py version 1.99\n\n(c) Marvin Jens 2012-2016.\nCheck http://www.circbase.org for more information."""
     sys.exit(0)
 
 if options.system:
@@ -407,14 +403,8 @@ if options.genome:
     genome = Track(options.genome,accessor=GenomeAccessor)
     
 if not (options.genome or options.system):
-    error("need to specify either model system database (-S) or genome (-G).")
+    error("need to specify either model system database (-S) or genome FASTA file (-G).")
     sys.exit(1)
-
-from itertools import izip_longest
-def grouper(n, iterable, fillvalue=None):
-    "grouper(3, 'ABCDEFG', 'x') --> ABC DEF Gxx"
-    args = [iter(iterable)] * n
-    return izip_longest(fillvalue=fillvalue, *args)
 
 # prepare output files
 if not os.path.isdir(options.output):
@@ -425,11 +415,28 @@ reads_file = file(os.path.join(options.output,"spliced_reads.fa"),"w")
 stats_file = file(os.path.join(options.output,"stats.log"),"w")
 multi_file = file(os.path.join(options.output,"multi_events.tsv"),"w")
 logging.basicConfig(level=logging.INFO,filename=os.path.join(options.output,"run.log"))
+logger = logging.getLogger('find_circ')
+
+if args:
+    logger.info('reading from {0}'.format(args[0]))
+    sam_input = pysam.Samfile(args[0],'rb')
+else:
+    logger.info('reading from stdin')
+    sam_input = pysam.Samfile('-','r')
+
+tid_cache = {}
+def fast_chrom_lookup(read):
+    tid = read.tid
+    if not tid in tid_cache: 
+        tid_cache[tid] = sam_input.getrname(tid)
+
+    return tid_cache[tid]
+
 if options.bam:
     bam_filename = os.path.join(options.output,"spliced_alignments.bam")
-
-    
-from collections import defaultdict
+    bam_out = pysam.Samfile(bam_filename,'wb',template=sam_input)
+else:
+    bam_out = None
 
 minmapscore = options.asize * (-2)
 
@@ -451,9 +458,11 @@ class Hit(object):
         self.strand_minus = 0
         self.strandmatch = 'NA'
         self.flags = defaultdict(int)
+        self.read_flags = defaultdict(set)
         
-    def add_flag(self,flag):
+    def add_flag(self,flag,frag_name):
         self.flags[flag] += 1
+        self.read_flags[frag_name].add(flag)
 
     def get_flags_counts(self):
         if not self.flags:
@@ -526,24 +535,10 @@ class Hit(object):
         tiss_counts = [str(self.tissues[k]) for k in tissues]
         return (n_spanned,self.counts,n_uniq,best_qual_A,best_qual_B,self.uniq_bridges,tissues,tiss_counts,min(self.edits),min(self.overlaps),min(self.n_hits),self.signal,self.strandmatch)
                 
-        
-loci = defaultdict(list)
 circ_splices = defaultdict(Hit)
 linear_splices = defaultdict(Hit)
 
 N = defaultdict(float)
-
-from numpy import chararray as carray
-from numpy import fromstring,byte
-
-
-tid_cache = {}
-def fast_chrom_lookup(read):
-    tid = read.tid
-    if not tid in tid_cache: 
-        tid_cache[tid] = sam.getrname(tid)
-
-    return tid_cache[tid]
 
 class MultiEventStorage(object):
     def __init__(self):
@@ -588,7 +583,12 @@ multi_event_storage = MultiEventStorage()
 
 
 def find_breakpoints(A,B,read,chrom,margin=options.margin,maxdist=options.maxdist):
-
+    """
+    Extends distal parts of two segment alignments such that the intervening 
+    read sequence is completely aligned and that the endpoints of this extension,
+    corresponding to the breakpoint inside the read, are flanked by splice signal
+    dinucleotides.
+    """
     def mismatches(a,b):
         a,b = fromstring(a,dtype=byte), fromstring(b,dtype=byte)
         
@@ -608,16 +608,15 @@ def find_breakpoints(A,B,read,chrom,margin=options.margin,maxdist=options.maxdis
 
     L = len(read)
     hits = []
+    eff_a = options.asize-margin
     if options.debug:
         print "readlen",L
         print " "*2+read
-    eff_a = options.asize-margin
-    #print " "*2+A.query[:-margin]
-    #print " "*(2+L-eff_b)+B.query[margin:]
-    #print " "*2+A.seq[:eff_a]
-    #print " "*(2+L-eff_a)+A.seq[-eff_a:]
+        print " "*2+A.query[:-margin]
+        print " "*(2+L-eff_a)+B.query[margin:]
+        print " "*2+A.seq[:eff_a]
+        print " "*(2+L-eff_a)+A.seq[-eff_a:]
 
-    
     internal = read[eff_a:-eff_a].upper()
         
     flank = L - (eff_a+eff_a) + 2
@@ -690,163 +689,201 @@ def find_breakpoints(A,B,read,chrom,margin=options.margin,maxdist=options.maxdis
         
     return ties
     
-sam = pysam.Samfile('-','r')
-if options.bam:
-    bam_out = pysam.Samfile(bam_filename,'wb',template=sam)
-else:
-    bam_out = None
 
-def anchors_bowtie2(sam):      
-    for pair_num,(A,B) in enumerate(grouper(2,sam)):
-        yield A,B,pair_num * 2
     
-    
-def adjacent_segment_pairs(segments):
-    """
-    This generator yields pairs of adjacent segments (meaning adjacent in 
-    the reads query sequence) to be processed by the known logic for splice 
-    junction determination.
-    Input is a list of segment alignments for a read as reported by BWA MEM.
-    In the simplest case these are two alignments to two exons, with the
-    parts belonging to the other exon clipped.
-    However, for longer reads these may also be split into three or
-    more segments.
-    """
+class MateSegments(object):
+    def __init__(self,primary):
+        N['total_mates'] += 1
+        self.primary = primary
+        if self.primary.is_read1:
+            self.matenum = 1
+        else:
+            self.matenum = 2
 
-    # the first BWA reported alignment for a read always contains the
-    # full, original read sequence
-    full_read = segments[0].seq
-    
-    # weight to assign to each splice. Now that a read can contain multiple
-    # splices (or a circRNA read even the same splice multiple times), we
-    # do not want to overcount.
-    weight = 1./(len(segments)-1.)
-    
-    def aligned_start_from_cigar(seg):
-        """
-        Determines the internal start position of this segment,
-        relative to the full read sequence.
-        """
-        start = 0
-        for op,count in seg.cigar:
-            if op in [4,5]: # soft or hard clip
-                start += count
-            elif op == 0: # match: aligned part begins
-                break
-        return start
+        if self.primary.is_reverse:
+            self.strand = '-'
+        else:
+            self.strand = '+'
+        self.segments = [primary]
+        self.proper_segs = [primary]
+        self.other_chrom_segs = []
+        self.other_strand_segs = []
+        self.seg_flags = {}
 
-    internal_starts = dict([( seg,aligned_start_from_cigar(seg) ) for seg in segments])
-    internal_ends   = dict([( seg,internal_starts[seg] + len(seg.query) ) for seg in segments])
-    
-    # sort by internal start position
-    seg_by_seq = sorted(segments,key = lambda seg: internal_starts[seg])
-    
-    # iterate over consecutive pairs of segments to find the 
-    # splices between them
-    # [A,B,C,D] -> (A,B),(B,C),(C,D)
-    for seg_a,seg_b in zip(seg_by_seq, seg_by_seq[1:]):
-        if options.debug:
-            print "A",seg_a
-            print "B",seg_b
+    def __str__(self):
+        buf = []
+        chrom = fast_chrom_lookup(self.primary)
 
-        start_a = internal_starts[seg_a]
-        end_a   = internal_ends[seg_a]
-        len_a =  end_a - start_a
+        buf.append("MateSegments({self.primary.qname} mate={self.matenum})".format(**locals()))
+        buf.append("\tprimary={chrom}:{self.primary.pos}-{self.primary.aend}:{self.strand}".format(**locals()))
+        n_proper = len(self.proper_segs)
+        n_oc = len(self.other_chrom_segs)
+        n_os = len(self.other_strand_segs)
+        flags = ",".join(sorted(self.seg_flags.values()))
+        buf.append("\t{n_proper} proper_segs {n_oc} other_chrom {n_os} other_strand. Flags={flags}".format(**locals()) )
         
-        start_b = internal_starts[seg_b]
-        end_b   = internal_ends[seg_b]
-        len_b = end_b - start_b
-        
-        if len_a < options.asize or len_b < options.asize:
-            # segment length is below required anchor length
-            N['seg_too_short_skip'] += 1
-            continue
+        return "\n".join(buf)
+            
+    def is_segment(self,align):
+        if (align.qname == self.primary.qname) and (align.is_read1 == self.primary.is_read1):
+            return True
+        else:
+            return False
 
-        r_start = min(start_a,start_b)
-        r_end = max(end_a,end_b)
-               
-        ## anchor pairs that make it up to here are interesting
+    def is_other_mate(self,align):
+        if (align.qname == self.primary.qname) and (align.is_read1 != self.primary.is_read1):
+            return True
+        else:
+            return False
+
+    def add_segment(self,align):
+        self.segments.append(align)
+        
+        if align.tid != self.primary.tid:
+            # secondary hit is on another chromosome
+            self.other_chrom_segs.append(align)
+            self.seg_flags[align] = "SEG_OTHER_CHROM"
+            N['seg_other_chrom'] += 1
+
+        elif align.is_reverse != self.primary.is_reverse:
+            # secondary hit is on other strand
+            self.other_strand_segs.append(align)
+            self.seg_flags[align] = "SEG_OTHER_STRAND"
+            N['seg_other_strand'] += 1
+        else:
+            # same chrom, same strand. could be useful
+            self.proper_segs.append(align)
+            N['seg_proper'] += 1
+
+    def adjacent_segment_pairs(self):
+        """
+        This generator yields pairs of adjacent segments (meaning adjacent in 
+        the reads query sequence) to be processed by the known logic for splice 
+        junction determination.
+        Input is the list of segment alignments for a read as reported by BWA MEM.
+        In the simplest case these are two alignments to two exons, with the
+        parts belonging to the other exon clipped.
+        However, for longer reads these may also be split into three or
+        more segments.
+        """
+
+        # the primary reported alignment for a read always contains the
+        # full, original read sequence
+        full_read = self.primary.seq
+        
+        # weight to assign to each splice. Now that a read can contain multiple
+        # splices (or a circRNA read even the same splice multiple times), we
+        # do not want to overcount.
+        weight = 1./(len(self.proper_segs)-1.)
+        
+        def aligned_start_from_cigar(seg):
+            """
+            Determines the internal start position of this segment,
+            relative to the full read sequence.
+            """
+            start = 0
+            for op,count in seg.cigar:
+                if op in [4,5]: # soft or hard clip
+                    start += count
+                elif op == 0: # match: aligned part begins
+                    break
+            return start
+
+        internal_starts = dict([( seg,aligned_start_from_cigar(seg) ) for seg in self.proper_segs])
+        internal_ends   = dict([( seg,internal_starts[seg] + len(seg.query) ) for seg in self.proper_segs])
+        
+        # sort by internal start position
+        seg_by_seq = sorted(self.proper_segs,key = lambda seg: internal_starts[seg])
+        
+        # iterate over consecutive pairs of segments to find the 
+        # splices between them
+        # [A,B,C,D] -> (A,B),(B,C),(C,D)
+        for seg_a,seg_b in zip(seg_by_seq, seg_by_seq[1:]):
+            if options.debug:
+                print "A",seg_a
+                print "B",seg_b
+
+            start_a = internal_starts[seg_a]
+            end_a   = internal_ends[seg_a]
+            len_a =  end_a - start_a
+            
+            start_b = internal_starts[seg_b]
+            end_b   = internal_ends[seg_b]
+            len_b = end_b - start_b
+            
+            if len_a < options.asize or len_b < options.asize:
+                # segment length is below required anchor length
+                N['seg_too_short_skip'] += 1
+                continue
+
+            r_start = min(start_a,start_b)
+            r_end = max(end_a,end_b)
+                
+            ## anchor pairs that make it up to here are interesting
+            if bam_out:
+                bam_out.write(seg_a)
+
+            yield seg_a,seg_b,r_start,r_end,weight
+
         if bam_out:
-            bam_out.write(seg_a)
             bam_out.write(seg_b)
 
-        yield seg_a,seg_b,r_start,r_end,weight
-        
-
-def collected_bwa_mem_segments(sam):
+def collected_bwa_mem_segments(sam_input):
     """
     Generator that loops over the SAM alignments. It groups alignments 
     belonging to segments of the same original read. 
     """
-
-    last_qname = ""
-    proper_segments = []
-    other_chrom_segments = []
-    other_strand_segments = []
-
     from time import time
     t0 = time()
     t_last = t0
-    for line_num,align in enumerate(sam):
-        if options.paired_end and align.is_read2:
-            # quick'n'dirty hack to make paired-end aware
-            align.qname += "_mate"
 
-        if not align.is_secondary:
-            N['total_reads'] += 1
-            if align.is_unmapped:
-                N['unmapped_reads'] += 1
-                continue
+    current_mate = None
+    other_mate = None
+    
+    for line_num,align in enumerate(sam_input):
+        if align.is_unmapped:
+            N['unmapped_reads'] += 1
+            continue
+
+        if not current_mate:
+            # This only happens for the very first alignment
+            current_mate = MateSegments(align)
+            continue
             
-        N['total_segs'] += 1
-        if align.qname != last_qname:
-            #if debug:
-                #print align.qname, "!=",last_qname,segments
-            # this alignment belongs to a new read
-            if proper_segments:
-                yield line_num,proper_segments,other_chrom_segments,other_strand_segments
-            proper_segments = []
-            other_chrom_segments = []
-            other_strand_segments = []
-
-        if not proper_segments:
-            # first reported alignment is the primary alignment
-            proper_segments.append(align)
+        if current_mate.is_segment(align):
+            #print align
+            assert align.is_supplementary == True
+            current_mate.add_segment(align)
+            
+        elif current_mate.is_other_mate(align):
+            assert align.is_supplementary == False
+            # we are switching to the other mate now:
+            other_mate,current_mate = current_mate,MateSegments(align)
         else:
-            # let's see if this secondary alignment matches the primary
-            primary = proper_segments[0]
-            if align.tid != primary.tid:
-                # secondary hit is on another chromosome
-                other_chrom_segments.append(align)
-                N['seg_other_chrom_skip'] += 1
+            # we have a completely new read! 
+            # Yield what we have so far:
+            yield line_num,other_mate,current_mate
+            # and start fresh
+            assert align.is_supplementary == False
+            other_mate = None
+            current_mate = MateSegments(align)
 
-            elif align.is_reverse != primary.is_reverse:
-                # secondary hit is on other strand
-                other_strand_segments.append(align)
-                N['seg_other_strand_skip'] += 1
-            else:
-                # same chrom, same strand. could be useful
-                proper_segments.append(align)
-
-        last_qname = align.qname
-        
         if options.throughput:
-            if line_num and not line_num % options.chunksize:
+            if line_num and not (line_num % options.chunksize):
                 t1 = time()
                 M_reads = line_num / 1E6
                 mins = (t1 - t0)/60.
                 krps = float(options.chunksize)/(t1-t_last)/1000.
-                sys.stderr.write("\rprocessed {M_reads:.2f}M reads in {mins:.1f} minutes ({krps:.2f}k reads/second)                 \r".format(**locals()))
+                sys.stderr.write("\rprocessed {M_reads:.2f}M reads in {mins:.1f} minutes ({krps:.2f}k reads/second)       \r".format(**locals()))
                 t_last = t1
 
-    if proper_segments:
-        yield line_num, proper_segments, other_chrom_segments, other_strand_segments
+    yield sam_line, other_mate, current_mate
 
     if options.throughput:
         sys.stderr.write('\n')
 
 
-def record_hits(frag_circ_splices, frag_linear_splices, frag_unspliced):
+def record_hits(frag_name,frag_circ_splices, frag_linear_splices, frag_unspliced):
     """
     This function processes the observed splicing events from a single 
     sequenced fragment (mate pair, or single end read). Long reads, or
@@ -891,7 +928,7 @@ def record_hits(frag_circ_splices, frag_linear_splices, frag_unspliced):
 
     if len(circ_junctions) > 1:
         for key in circ_junctions:
-            circ_splices[key].add_flag('WARN_MULTI_BACKSPLICE')
+            circ_splices[key].add_flag('WARN_MULTI_BACKSPLICE',frag_name)
         return
 
     # we are sure now, that there is exactly one circ junction in the fragment.
@@ -907,138 +944,135 @@ def record_hits(frag_circ_splices, frag_linear_splices, frag_unspliced):
     for chrom,start,end,sense in unspliced:
         if circ_chrom == chrom:
             if start + options.asize <= circ_start or end - options.asize >= circ_end:
-                circ_hit.add_flag('WARN_OUTSIDE_SEG')
+                circ_hit.add_flag('WARN_OUTSIDE_SEG',frag_name)
             else:
-                circ_hit.add_flag('SUPPORT_INSIDE_SEG')
+                circ_hit.add_flag('SUPPORT_INSIDE_SEG',frag_name)
         else:
-            circ_hit.add_flag('WARN_OTHER_CHROM_SEG')
+            circ_hit.add_flag('WARN_OTHER_CHROM_SEG',frag_name)
             
     for chrom,start,end,sense in lin_junctions:
         if start <= circ_start or end >= circ_end:
-            circ_hit.add_flag('WARN_OUTSIDE_SPLICE_JUNCTION')
+            circ_hit.add_flag('WARN_OUTSIDE_SPLICE_JUNCTION',frag_name)
         else:
-            circ_hit.add_flag('SUPPORT_INSIDE_SPLICE_JUNCTION')
+            circ_hit.add_flag('SUPPORT_INSIDE_SPLICE_JUNCTION',frag_name)
 
     if unspliced or lin_junctions:
         # we have a multi-splicing event!
         multi_event_storage.add(circ_key,lin_junctions, unspliced)
 
     
-if options.bwa_mem:
-    try:
-        sam_line = 0
-        last_first_mate = ""
+# main loop
+try:
+    sam_line = 0
+    last_first_mate = ""
 
-        frag_circ_splices = []
-        frag_linear_splices = []
-        frag_unspliced = []
+    frag_circ_splices = []
+    frag_linear_splices = []
+    frag_unspliced = []
+    
+    def process_mate(mate):
+        if len(mate.segments) < 2:
+            N['unspliced_reads'] += 1
+            frag_unspliced.append(mate.primary)
+            return
         
-        for sam_line,segments,other_chrom,other_strand in collected_bwa_mem_segments(sam):
-            primary = segments[0]
-            if options.debug:
-                print "one iteration",segments
-            if primary.is_read1 or primary.qname != last_first_mate + "_mate":
-                # we switched to a new mate pair/single end read
-                if options.debug:
-                    print "we switched to a new mate pair/single end read",primary.qname, last_first_mate
-
-                if frag_circ_splices or frag_linear_splices:
-                    record_hits(frag_circ_splices,frag_linear_splices,frag_unspliced)
-                    
-                frag_circ_splices = []
-                frag_linear_splices = []
-                frag_unspliced = []
-            
-            if primary.is_read1:
-                last_first_mate = primary.qname
-
-            if len(segments) < 2:
-                N['unspliced_reads'] += 1
-                frag_unspliced.append(primary)
+        # keep track of which parts of the read are already aligned 
+        read_covered = np.zeros(len(mate.primary.seq))
+        for A,B,r_start,r_end,w in mate.adjacent_segment_pairs():
+            if options.noop:
                 continue
             
-            # keep track of which parts of the read are already aligned 
-            read_covered = np.zeros(len(primary.seq))
-            for A,B,r_start,r_end,w in adjacent_segment_pairs(segments):
-                if options.noop:
-                    continue
+            if options.debug:
+                print A
+                print B
                 
+            dist = B.pos - A.aend
+            full_read = mate.primary.seq
+            read_part = full_read[r_start:r_end]
+
+            if dist <= 0:
+                # the anchors align in reversed orientation -> circRNA?
                 if options.debug:
-                    print A
-                    print B
-                    
-                dist = B.pos - A.aend
-                full_read = primary.seq
-                read_part = full_read[r_start:r_end]
+                    print "potential circ"
 
-                if dist <= 0:
-                    # the anchors align in reversed orientation -> circRNA?
-                    if options.debug:
-                        print "potential circ"
-
-                    chrom = fast_chrom_lookup(A)
-                    bp = find_breakpoints(A,B,read_part,chrom)
-                    if not bp:
-                        N['circ_no_bp'] += w
-                    else:
-                        N['circ_spliced_weighted'] += w
-                        N['circ_spliced'] += 1
-                        read_covered[r_start:r_end] = 1
-
-                    n_hits = len(bp)
-                    if bp and not options.allhits:
-                        bp = [bp[0],]
-
-                    for dist,ov,strandmatch,rnd,chrom,start,end,signal,sense in bp:
-                        # for some weird reason for circ we need a correction here
-                        start += 1
-                        end -+ 1
-                        frag_circ_splices.append( (chrom,start,end,sense,primary,full_read,A,B,dist,ov,strandmatch,signal,n_hits,w) )
-
-                elif dist > 0:
-                    # the anchors align sequentially -> linear/normal splice junction?
-                    if options.nolinear:
-                        N['linear_splice_skipped'] += 1
-                        continue
-
-                    chrom = fast_chrom_lookup(A)
-                    bp = find_breakpoints(A,B,read_part,chrom)
-                    if not bp:
-                        N['linear_splice_no_bp'] += 1
-                    else:
-                        N['linear_splice_covered'] += 1
-                        read_covered[r_start:r_end] = 1
-
-                    n_hits = len(bp)
-                    if bp and not options.allhits:
-                        bp = [bp[0],]
-                    
-                    for dist,ov,strandmatch,rnd,chrom,start,end,signal,sense in bp:
-                        frag_linear_splices.append( (chrom,start,end,sense,primary,full_read,A,B,dist,ov,strandmatch,signal,n_hits,w) )
+                chrom = fast_chrom_lookup(A)
+                bp = find_breakpoints(A,B,read_part,chrom)
+                if not bp:
+                    N['circ_no_bp'] += w
                 else:
-                    N['fallout'] += 1
-                    warning("unhandled read: A='%s' B='%s'" % (A,B))
+                    N['circ_spliced_weighted'] += w
+                    N['circ_spliced'] += 1
+                    read_covered[r_start:r_end] = 1
+
+                n_hits = len(bp)
+                if bp and not options.allhits:
+                    bp = [bp[0],]
+
+                for dist,ov,strandmatch,rnd,chrom,start,end,signal,sense in bp:
+                    # for some weird reason for circ we need a correction here
+                    start += 1
+                    end -= 1
+                    frag_circ_splices.append( (chrom,start,end,sense,mate.primary,full_read,A,B,dist,ov,strandmatch,signal,n_hits,w) )
+
+            elif dist > 0:
+                # the anchors align sequentially -> linear/normal splice junction?
+                if options.nolinear:
+                    N['linear_splice_skipped'] += 1
+                    continue
+
+                chrom = fast_chrom_lookup(A)
+                bp = find_breakpoints(A,B,read_part,chrom)
+                if not bp:
+                    N['linear_splice_no_bp'] += 1
+                else:
+                    N['linear_splice_covered'] += 1
+                    read_covered[r_start:r_end] = 1
+
+                n_hits = len(bp)
+                if bp and not options.allhits:
+                    bp = [bp[0],]
+                
+                for dist,ov,strandmatch,rnd,chrom,start,end,signal,sense in bp:
+                    frag_linear_splices.append( (chrom,start,end,sense,mate.primary,full_read,A,B,dist,ov,strandmatch,signal,n_hits,w) )
+            else:
+                N['fallout'] += 1
+                warning("unhandled read: A='%s' B='%s'" % (A,B))
 
         if read_covered.sum() < len(full_read) - options.asize:
-            # we are missing a part of the read larger than options.asize
-            # that could not be accounted for by the proper_segments
+            # we are still missing a part of the read larger than options.asize
+            # that could not be accounted for by the proper_segs
             # treat possible other fragments as if they were an unspliced mate
             frag_unspliced.extend(other_chrom)
             frag_unspliced.extend(other_strand)
-            
+
+        
+    for sam_line,mate1,mate2 in collected_bwa_mem_segments(sam_input):
+        if options.debug:
+            print "one iteration",mate1,mate2
+
+        if mate1: process_mate(mate1)
+        if mate2: process_mate(mate2)
+
         if frag_circ_splices or frag_linear_splices:
-            record_hits(frag_circ_splices,frag_linear_splices,frag_unspliced)
+            record_hits(last_first_mate,frag_circ_splices,frag_linear_splices,frag_unspliced)
                 
-    except KeyboardInterrupt:
-        fastq_line = sam_line * 4
+            frag_circ_splices = []
+            frag_linear_splices = []
+            frag_unspliced = []
+        
+    if frag_circ_splices or frag_linear_splices:
+        record_hits(last_first_mate,frag_circ_splices,frag_linear_splices,frag_unspliced)
+            
+except KeyboardInterrupt:
+    fastq_line = sam_line * 4
 
-        logging.warning("KeyboardInterrupt by user while processing input starting at SAM line {sam_line}, FASTQ line {fastq_line}".format(**locals()))
-    except:        
-        fastq_line = sam_line * 4
+    logging.warning("KeyboardInterrupt by user while processing input starting at SAM line {sam_line}, FASTQ line {fastq_line}".format(**locals()))
+except:        
+    fastq_line = sam_line * 4
 
-        logging.error("Unhandled exception raised while processing input starting at SAM line {sam_line}, FASTQ line {fastq_line}".format(**locals()))
-        traceback.print_exc(file=sys.stderr)
-        sys.exit(1)
+    logging.error("Unhandled exception raised while processing input starting at SAM line {sam_line}, FASTQ line {fastq_line}".format(**locals()))
+    traceback.print_exc(file=sys.stderr)
+    sys.exit(1)
     
 
 def output(cand,prefix):
@@ -1048,8 +1082,7 @@ def output(cand,prefix):
         #print c,hit
         chrom,start,end,sense = c
         n_spanned,counts,n_uniq,best_qual_A,best_qual_B,uniq_bridges,tissues,tiss_counts,min_edit,min_anchor_ov,n_hits,signal,strandmatch = hit.scores(chrom,start,end,sense)
-        #print n_spanned,counts,n_uniq,best_qual_A,best_qual_B,uniq_bridges,tissues,tiss_counts,min_edit,min_anchor_ov,n_hits,signal,strandmatch
-        #print best_qual_A,best_qual_B, uniq_bridges
+
         if options.halfunique:
             if (best_qual_A < options.min_uniq_qual) and (best_qual_B < options.min_uniq_qual):
                 N['anchor_not_uniq'] += 1
@@ -1063,12 +1096,19 @@ def output(cand,prefix):
                 N['no_uniq_bridges'] += 1
                 continue
 
-        #print N
         name = "%s_%s_%06d" % (options.name,prefix,n)
         n += 1
-        #sys.stderr.write("%s\t%s\n" % (name,"\t".join(sorted(reads))))
+        
+        ## Store the reads associated with this hit. 
+        ## TODO: We could also do this right away, when registering the read...
         for r_seq,ori_name in zip(hit.reads,hit.readnames):
-            reads_file.write(">%s %s\n%s\n" % (ori_name,name,r_seq))
+            
+            flags = hit.read_flags.get(ori_name)
+            if flags:
+                flag_str = ",".join(sorted(flags))
+            else:
+                flag_str = "BACKSPLICE"
+            reads_file.write(">%s %s %s\n%s\n" % (ori_name,name,r_seq,flag_str))
       
         categories = []
         if signal == "GTAG":
@@ -1113,7 +1153,6 @@ def output(cand,prefix):
         sites_file.write("\t".join([str(b) for b in bed]) + "\n")
 
 stats_file.write(str(N)+"\n")
-
 output(circ_splices,"circ")
 output(linear_splices,"norm")
 multi_file.write(multi_event_storage.output())
