@@ -387,6 +387,7 @@ parser.add_option("-d","--max-mismatch",dest="maxdist",type=int,default=2,help="
 parser.add_option("","--short-threshold",dest="short_threshold",type=int,default=100,help="minimal genomic span [nt] of a circRNA before it is labeled SHORT (default=100)")
 parser.add_option("","--huge-threshold",dest="huge_threshold",type=int,default=100000,help="maximal genomic span [nt] of a circRNA before it is labeled HUGE (default=100000)")
 parser.add_option("","--debug",dest="debug",default=False,action="store_true",help="Activate LOTS of debug output")
+parser.add_option("","--profile",dest="profile",default=False,action="store_true",help="Activate performance profiling")
 
 parser.add_option("","--non-canonical",dest="noncanonical",default=False,action="store_true",help="relax the GU/AG constraint (will produce many more ambiguous counts)")
 parser.add_option("","--randomize",dest="randomize",default=False,action="store_true",help="select randomly from tied, best, ambiguous hits")
@@ -712,6 +713,9 @@ class JunctionSpan(object):
         A = self.align_A
         B = self.align_B
         read = self.read_part
+        margin = options.margin
+        maxdist = options.maxdist
+        is_backsplice = self.is_backsplice
         # effective anchor size is reduced by allowing the breakpoint to reside 
         # options.margin nt's inside the anchor
         eff_a = options.asize-options.margin
@@ -747,13 +751,13 @@ class JunctionSpan(object):
                 if options.debug:
                     print " "*(eff_a+2)+bla,dist
            
-            if dist <= options.maxdist:
+            if dist <= maxdist:
                 # is the tested breakpoint inside an anchor?
                 ov = 0
-                if x < options.margin:
-                    ov = options.margin-x
-                if l-x < options.margin:
-                    ov = options.margin-(l-x)
+                if x < margin:
+                    ov = margin-x
+                if l-x < margin:
+                    ov = margin-(l-x)
 
                 gt = A_flank[x:x+2]
                 ag = B_flank[x:x+2]
@@ -772,7 +776,7 @@ class JunctionSpan(object):
                     else:
                         strand = '+'
 
-                if self.is_backsplice:
+                if is_backsplice:
                     # for circs we need to correct here
                     start += 1
                     end -= 1
@@ -809,22 +813,27 @@ class MateSegments(object):
         N['total_mates'] += 1
         self.primary = primary
         self.full_seq = primary.seq
-        if self.primary.is_read2:
-            self.matenum = 2
-        else:
-            # this also catches unpaired reads
-            self.matenum = 1
-
-        if self.primary.is_reverse:
-            self.strand = '-'
-        else:
-            self.strand = '+'
         self.segments = [primary]
         self.proper_segs = [primary]
         self.other_chrom_segs = []
         self.other_strand_segs = []
         self.seg_flags = {}
 
+    @property
+    def matenum(self):
+        if self.primary.is_read2:
+            return 2
+        else:
+            # this also catches unpaired reads
+            return 1
+        
+    @property
+    def strand(self):
+        if self.primary.is_reverse:
+            return '-'
+        else:
+            return '+'
+        
     def __str__(self):
         "Python magic to make nice debug output possible"
         buf = []
@@ -842,14 +851,14 @@ class MateSegments(object):
             
     def is_segment(self,align):
         "tests if align is supplementary to the primary"
-        if (align.qname == self.primary.qname) and (align.is_read1 == self.primary.is_read1):
+        if (align.is_read1 == self.primary.is_read1) and (align.qname == self.primary.qname):
             return True
         else:
             return False
 
     def is_other_mate(self,align):
         "tests if align is the other mate of the primary alignment."
-        if (align.qname == self.primary.qname) and (align.is_read1 != self.primary.is_read1):
+        if (align.is_read1 != self.primary.is_read1) and (align.qname == self.primary.qname):
             return True
         else:
             return False
@@ -1077,101 +1086,101 @@ def record_hits(frag_name,frag_circ_splices, frag_linear_splices, frag_unspliced
         # we have a multi-splicing event!
         multi_event_storage.add(circ_coord,lin_junctions, unspliced)
 
-    
-# main loop
-try:
-    sam_line = 0
-    last_first_mate = ""
 
-    frag_circ_splices = []
-    frag_linear_splices = []
-    frag_unspliced = []
-    
-    def process_mate(mate):
-        if len(mate.segments) < 2:
-            N['unspliced_reads'] += 1
-            frag_unspliced.append(mate.primary)
-            return
+def main():    
+    # main loop
+    try:
+        sam_line = 0
+        last_first_mate = ""
+
+        frag_circ_splices = []
+        frag_linear_splices = []
+        frag_unspliced = []
         
-        # keep track of which parts of the read are already aligned 
-        read_covered = np.zeros(len(mate.primary.seq))
-        #for A,B,r_start,r_end,w in mate.adjacent_segment_pairs():
-        for junc_span in mate.adjacent_segment_pairs():
-            if options.noop:
-                continue
+        def process_mate(mate):
+            if len(mate.segments) < 2:
+                N['unspliced_reads'] += 1
+                frag_unspliced.append(mate.primary)
+                return
             
-            if junc_span.is_backsplice:
-                if options.debug:
-                    print "potential circ"
+            # keep track of which parts of the read are already aligned 
+            read_covered = np.zeros(len(mate.primary.seq))
+            #for A,B,r_start,r_end,w in mate.adjacent_segment_pairs():
+            for junc_span in mate.adjacent_segment_pairs():
+                if options.noop:
+                    continue
+                
+                if junc_span.is_backsplice:
+                    if options.debug:
+                        print "potential circ"
 
-                prefix = 'circ'
-                frag_list = frag_circ_splices
-            else:
-                # the anchors align sequentially -> linear/normal splice junction?
-                if options.nolinear:
-                    N['linear_splice_skipped'] += 1
+                    prefix = 'circ'
+                    frag_list = frag_circ_splices
+                else:
+                    # the anchors align sequentially -> linear/normal splice junction?
+                    if options.nolinear:
+                        N['linear_splice_skipped'] += 1
+                        continue
+
+                    prefix = 'linear'
+                    frag_list = frag_linear_splices
+
+
+                # TODO: if --ignore-linear is specified, only do this 
+                # if at least one backsplice occurred in at least one mate instead of skipping all linear
+                splices = junc_span.find_breakpoints()
+                if not splices:
+                    N['{0}_no_bp_weighted'.format(prefix)] += junc_span.weight
+                    N['{0}_no_bp'.format(prefix)] += 1
                     continue
 
-                prefix = 'linear'
-                frag_list = frag_linear_splices
+
+                N['{0}_spliced_weighted'.format(prefix)] += junc_span.weight
+                N['{0}_spliced'.format(prefix)] += 1
+                read_covered[junc_span.q_start:junc_span.q_end] = 1
+
+                if not options.allhits:
+                    splices = [splices[0],]
+
+                for splice in splices:
+                    frag_list.append( (splice,junc_span,mate) )
 
 
-            # TODO: if --ignore-linear is specified, only do this 
-            # if at least one backsplice occurred in at least one mate instead of skipping all linear
-            splices = junc_span.find_breakpoints()
-            if not splices:
-                N['{0}_no_bp_weighted'.format(prefix)] += junc_span.weight
-                N['{0}_no_bp'.format(prefix)] += 1
-                continue
+            if read_covered.sum() < len(mate.full_seq) - options.asize:
+                # we are still missing a part of the read larger than options.asize
+                # that could not be accounted for by the proper_segs
+                # treat possible other fragments as if they were an unspliced mate
+                frag_unspliced.extend(mate.other_chrom_segs)
+                frag_unspliced.extend(mate.other_strand_segs)
 
+            
+        for sam_line,mate1,mate2 in collected_bwa_mem_segments(sam_input):
+            if options.debug:
+                print "one iteration",mate1,mate2
 
-            N['{0}_spliced_weighted'.format(prefix)] += junc_span.weight
-            N['{0}_spliced'.format(prefix)] += 1
-            read_covered[junc_span.q_start:junc_span.q_end] = 1
+            if mate1: process_mate(mate1)
+            if mate2: process_mate(mate2)
 
-            if not options.allhits:
-                splices = [splices[0],]
-
-            for splice in splices:
-                frag_list.append( (splice,junc_span,mate) )
-
-
-        if read_covered.sum() < len(mate.full_seq) - options.asize:
-            # we are still missing a part of the read larger than options.asize
-            # that could not be accounted for by the proper_segs
-            # treat possible other fragments as if they were an unspliced mate
-            frag_unspliced.extend(mate.other_chrom)
-            frag_unspliced.extend(mate.other_strand)
-
-        
-    for sam_line,mate1,mate2 in collected_bwa_mem_segments(sam_input):
-        if options.debug:
-            print "one iteration",mate1,mate2
-
-        if mate1: process_mate(mate1)
-        if mate2: process_mate(mate2)
-
+            if frag_circ_splices or frag_linear_splices:
+                record_hits(last_first_mate,frag_circ_splices,frag_linear_splices,frag_unspliced)
+                    
+                frag_circ_splices = []
+                frag_linear_splices = []
+                frag_unspliced = []
+            
         if frag_circ_splices or frag_linear_splices:
             record_hits(last_first_mate,frag_circ_splices,frag_linear_splices,frag_unspliced)
                 
-            frag_circ_splices = []
-            frag_linear_splices = []
-            frag_unspliced = []
-        
-    if frag_circ_splices or frag_linear_splices:
-        record_hits(last_first_mate,frag_circ_splices,frag_linear_splices,frag_unspliced)
-            
-except KeyboardInterrupt:
-    fastq_line = sam_line * 4
+    except KeyboardInterrupt:
+        fastq_line = sam_line * 4
 
-    logging.warning("KeyboardInterrupt by user while processing input starting at SAM line {sam_line}, FASTQ line {fastq_line}".format(**locals()))
-except:        
-    fastq_line = sam_line * 4
+        logging.warning("KeyboardInterrupt by user while processing input starting at SAM line {sam_line}, FASTQ line {fastq_line}".format(**locals()))
+    except:        
+        fastq_line = sam_line * 4
 
-    logging.error("Unhandled exception raised while processing input starting at SAM line {sam_line}, FASTQ line {fastq_line}".format(**locals()))
-    traceback.print_exc(file=sys.stderr)
-    sys.exit(1)
-    
+        logging.error("Unhandled exception raised while processing input starting at SAM line {sam_line}, FASTQ line {fastq_line}".format(**locals()))
+        traceback.print_exc(file=sys.stderr)
+        sys.exit(1)
 
 def output(cand,prefix):
     sites_file.write("#" + "\t".join(['chrom','start','end','name','counts','strand','n_spanned','n_uniq','uniq_bridges','best_qual_left','best_qual_right','tissues','tiss_counts','edits','anchor_overlap','breakpoints','signal','strandmatch','category']) + "\n")
@@ -1249,6 +1258,13 @@ def output(cand,prefix):
             ",".join(flags),",".join([str(c) for c in flag_counts]), # internal structure support from fragment evidence (BWA MEM)
         ]
         sites_file.write("\t".join([str(b) for b in bed]) + "\n")
+
+
+if options.profile:
+    import cProfile
+    cProfile.run('main()')
+else:
+    main()
 
 stats_file.write(str(N)+"\n")
 output(circ_splices,"circ")
