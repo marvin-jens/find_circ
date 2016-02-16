@@ -984,11 +984,11 @@ def collected_bwa_mem_segments(sam_input):
             continue
             
         if current_mate.is_segment(align):
-            assert align.is_supplementary == True
+            #assert align.is_supplementary == True
             current_mate.add_segment(align)
             
         elif current_mate.is_other_mate(align):
-            assert align.is_supplementary == False
+            #assert align.is_supplementary == False
             # we are switching to the other mate now:
             other_mate,current_mate = current_mate,MateSegments(align)
         else:
@@ -996,7 +996,7 @@ def collected_bwa_mem_segments(sam_input):
             # Yield what we have so far:
             yield line_num,other_mate,current_mate
             # and start fresh
-            assert align.is_supplementary == False
+            #assert align.is_supplementary == False
             other_mate = None
             current_mate = MateSegments(align)
 
@@ -1104,7 +1104,10 @@ def main():
                 return
             
             # keep track of which parts of the read are already aligned 
-            read_covered = np.zeros(len(mate.primary.seq))
+            L = len(mate.full_seq)
+            min_s = L
+            max_e = 0
+            
             #for A,B,r_start,r_end,w in mate.adjacent_segment_pairs():
             for junc_span in mate.adjacent_segment_pairs():
                 if options.noop:
@@ -1137,7 +1140,9 @@ def main():
 
                 N['{0}_spliced_weighted'.format(prefix)] += junc_span.weight
                 N['{0}_spliced'.format(prefix)] += 1
-                read_covered[junc_span.q_start:junc_span.q_end] = 1
+                
+                min_s = min(min_s,junc_span.q_start)
+                max_e = max(max_e,junc_span.q_end)
 
                 if not options.allhits:
                     splices = [splices[0],]
@@ -1146,7 +1151,7 @@ def main():
                     frag_list.append( (splice,junc_span,mate) )
 
 
-            if read_covered.sum() < len(mate.full_seq) - options.asize:
+            if (max_e < L - options.asize) or (min_s > options.asize):
                 # we are still missing a part of the read larger than options.asize
                 # that could not be accounted for by the proper_segs
                 # treat possible other fragments as if they were an unspliced mate
