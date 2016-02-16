@@ -425,7 +425,7 @@ if not (options.genome or options.system):
     sys.exit(1)
 
 # prepare logging system
-logging.basicConfig(level=logging.INFO,filename=os.path.join(options.output,"run.log"))
+logging.basicConfig(level=logging.INFO,filename=os.path.join(options.output,"run.log"),filemode='w')
 logger = logging.getLogger('find_circ')
 
 # prepare output files
@@ -966,9 +966,6 @@ def collected_bwa_mem_segments(sam_input):
     Generator that loops over the SAM alignments. It groups alignments 
     belonging to the same original read. 
     """
-    from time import time
-    t0 = time()
-    t_last = t0
 
     current_mate = None
     other_mate = None
@@ -1000,19 +997,7 @@ def collected_bwa_mem_segments(sam_input):
             other_mate = None
             current_mate = MateSegments(align)
 
-        if options.throughput:
-            if line_num and not (line_num % options.chunksize):
-                t1 = time()
-                M_reads = line_num / 1E6
-                mins = (t1 - t0)/60.
-                krps = float(options.chunksize)/(t1-t_last)/1000.
-                sys.stderr.write("\rprocessed {M_reads:.2f}M reads in {mins:.1f} minutes ({krps:.2f}k reads/second)       \r".format(**locals()))
-                t_last = t1
-
     yield sam_line, other_mate, current_mate
-
-    if options.throughput:
-        sys.stderr.write('\n')
 
 
 def record_hits(frag_name,frag_circ_splices, frag_linear_splices, frag_unspliced):
@@ -1089,77 +1074,83 @@ def record_hits(frag_name,frag_circ_splices, frag_linear_splices, frag_unspliced
 
 def main():    
     # main loop
-    try:
-        sam_line = 0
-        last_first_mate = ""
 
-        frag_circ_splices = []
-        frag_linear_splices = []
-        frag_unspliced = []
+    sam_line = 0
+    last_first_mate = ""
+
+    frag_circ_splices = []
+    frag_linear_splices = []
+    frag_unspliced = []
+    
+    def process_mate(mate):
+        if len(mate.segments) < 2:
+            N['unspliced_reads'] += 1
+            frag_unspliced.append(mate.primary)
+            return
         
-        def process_mate(mate):
-            if len(mate.segments) < 2:
-                N['unspliced_reads'] += 1
-                frag_unspliced.append(mate.primary)
-                return
+        # keep track of which parts of the read are already aligned 
+        L = len(mate.full_seq)
+        min_s = L
+        max_e = 0
+        
+        #for A,B,r_start,r_end,w in mate.adjacent_segment_pairs():
+        for junc_span in mate.adjacent_segment_pairs():
+            if options.noop:
+                continue
             
-            # keep track of which parts of the read are already aligned 
-            L = len(mate.full_seq)
-            min_s = L
-            max_e = 0
-            
-            #for A,B,r_start,r_end,w in mate.adjacent_segment_pairs():
-            for junc_span in mate.adjacent_segment_pairs():
-                if options.noop:
-                    continue
-                
-                if junc_span.is_backsplice:
-                    if options.debug:
-                        print "potential circ"
+            if junc_span.is_backsplice:
+                if options.debug:
+                    print "potential circ"
 
-                    prefix = 'circ'
-                    frag_list = frag_circ_splices
-                else:
-                    # the anchors align sequentially -> linear/normal splice junction?
-                    if options.nolinear:
-                        N['linear_splice_skipped'] += 1
-                        continue
-
-                    prefix = 'linear'
-                    frag_list = frag_linear_splices
-
-
-                # TODO: if --ignore-linear is specified, only do this 
-                # if at least one backsplice occurred in at least one mate instead of skipping all linear
-                splices = junc_span.find_breakpoints()
-                if not splices:
-                    N['{0}_no_bp_weighted'.format(prefix)] += junc_span.weight
-                    N['{0}_no_bp'.format(prefix)] += 1
+                prefix = 'circ'
+                frag_list = frag_circ_splices
+            else:
+                # the anchors align sequentially -> linear/normal splice junction?
+                if options.nolinear:
+                    N['linear_splice_skipped'] += 1
                     continue
 
-
-                N['{0}_spliced_weighted'.format(prefix)] += junc_span.weight
-                N['{0}_spliced'.format(prefix)] += 1
-                
-                min_s = min(min_s,junc_span.q_start)
-                max_e = max(max_e,junc_span.q_end)
-
-                if not options.allhits:
-                    splices = [splices[0],]
-
-                for splice in splices:
-                    frag_list.append( (splice,junc_span,mate) )
+                prefix = 'linear'
+                frag_list = frag_linear_splices
 
 
-            if (max_e < L - options.asize) or (min_s > options.asize):
-                # we are still missing a part of the read larger than options.asize
-                # that could not be accounted for by the proper_segs
-                # treat possible other fragments as if they were an unspliced mate
-                frag_unspliced.extend(mate.other_chrom_segs)
-                frag_unspliced.extend(mate.other_strand_segs)
+            # TODO: if --ignore-linear is specified, only do this 
+            # if at least one backsplice occurred in at least one mate instead of skipping all linear
+            splices = junc_span.find_breakpoints()
+            if not splices:
+                N['{0}_no_bp_weighted'.format(prefix)] += junc_span.weight
+                N['{0}_no_bp'.format(prefix)] += 1
+                continue
 
+
+            N['{0}_spliced_weighted'.format(prefix)] += junc_span.weight
+            N['{0}_spliced'.format(prefix)] += 1
             
+            min_s = min(min_s,junc_span.q_start)
+            max_e = max(max_e,junc_span.q_end)
+
+            if not options.allhits:
+                splices = [splices[0],]
+
+            for splice in splices:
+                frag_list.append( (splice,junc_span,mate) )
+
+
+        if (max_e < L - options.asize) or (min_s > options.asize):
+            # we are still missing a part of the read larger than options.asize
+            # that could not be accounted for by the proper_segs
+            # treat possible other fragments as if they were an unspliced mate
+            frag_unspliced.extend(mate.other_chrom_segs)
+            frag_unspliced.extend(mate.other_strand_segs)
+
+    from time import time
+    t0 = time()
+    t_last = t0
+    n_reads = 0
+    
+    try:
         for sam_line,mate1,mate2 in collected_bwa_mem_segments(sam_input):
+            n_reads += 1
             if options.debug:
                 print "one iteration",mate1,mate2
 
@@ -1172,20 +1163,36 @@ def main():
                 frag_circ_splices = []
                 frag_linear_splices = []
                 frag_unspliced = []
-            
-        if frag_circ_splices or frag_linear_splices:
-            record_hits(last_first_mate,frag_circ_splices,frag_linear_splices,frag_unspliced)
+
+            if frag_circ_splices or frag_linear_splices:
+                record_hits(last_first_mate,frag_circ_splices,frag_linear_splices,frag_unspliced)
+
+            if options.throughput:
+                if n_reads and not (n_reads % options.chunksize):
+                    t1 = time()
+                    M_reads = n_reads / 1E6
+                    mins = (t1 - t0)/60.
+                    krps = float(options.chunksize)/float(t1-t_last)/1000.
+                    #krps = float(n_reads)/(t1 - t0)/1000.
+                    sys.stderr.write("\rprocessed {M_reads:.2f}M (paired-end) reads in {mins:.1f} minutes ({krps:.2f}k reads/second)       \r".format(**locals()))
+                    t_last = t1
                 
     except KeyboardInterrupt:
-        fastq_line = sam_line * 4
-
-        logging.warning("KeyboardInterrupt by user while processing input starting at SAM line {sam_line}, FASTQ line {fastq_line}".format(**locals()))
+        logging.warning("KeyboardInterrupt by user while processing input starting at SAM line {sam_line}".format(**locals()))
     except:        
-        fastq_line = sam_line * 4
-
-        logging.error("Unhandled exception raised while processing input starting at SAM line {sam_line}, FASTQ line {fastq_line}".format(**locals()))
-        traceback.print_exc(file=sys.stderr)
+        logging.error("Unhandled exception raised while processing input starting at SAM line {sam_line}".format(**locals()))
+        exc = traceback.format_exc()
+        logging.error(exc)
+        sys.stderr.write(exc)
         sys.exit(1)
+
+    if options.throughput:
+        sys.stderr.write('\n')
+
+    M_reads = n_reads / 1E6
+    mins = (t1 - t0)/60.
+    krps = float(n_reads)/(t1 - t0)/1000.
+    logger.info("processed {M_reads:.2f}M (paired-end) reads in {mins:.1f} minutes (overall {krps:.2f}k reads/second on average)".format(**locals()))
 
 def output(cand,prefix):
     sites_file.write("#" + "\t".join(['chrom','start','end','name','counts','strand','n_spanned','n_uniq','uniq_bridges','best_qual_left','best_qual_right','tissues','tiss_counts','edits','anchor_overlap','breakpoints','signal','strandmatch','category']) + "\n")
