@@ -376,6 +376,8 @@ parser = optparse.OptionParser(usage=usage)
 parser.add_option("-v","--version",dest="version",action="store_true",default=False,help="get version information")
 parser.add_option("-S","--system",dest="system",type=str,default="",help="model system database (optional! Requires byo library.)")
 parser.add_option("-G","--genome",dest="genome",type=str,default="",help="path to genome (either a folder with chr*.fa or one multichromosome FASTA file)")
+parser.add_option("","--known-circ",dest="known_circ",type=str,default="",help="file with known circRNA junctions (BED6)")
+parser.add_option("","--known-lin",dest="known_lin",type=str,default="",help="file with known linear splice junctions (BED6)")
 parser.add_option("-o","--output",dest="output",default="find_circ_run",help="where to store output")
 parser.add_option("","--stdout",dest="stdout",default=None,choices=['sites','reads','stats','multi'],help="use to direct chosen type of output (sites, reads, stats, multi) to stdout instead of file")
 parser.add_option("-n","--name",dest="name",default="unknown",help="tissue/sample name to use (default='unknown')")
@@ -470,8 +472,10 @@ else:
 
 minmapscore = options.asize * (-2)
 
+                 
 class Hit(object):
-    def __init__(self):
+    def __init__(self,name,splice):
+        self.name = name
         self.reads = []
         self.counts = 0.
         self.readnames = []
@@ -479,7 +483,6 @@ class Hit(object):
         self.mapquals_A = []
         self.mapquals_B = []
         self.uniq_bridges = 0.
-        self.tissues = defaultdict(int)
         self.edits = []
         self.overlaps = []
         self.n_hits = []
@@ -489,6 +492,10 @@ class Hit(object):
         self.strandmatch = 'NA'
         self.flags = defaultdict(int)
         self.read_flags = defaultdict(set)
+        self.tissues = defaultdict(float)
+
+        self.coord = splice.coord
+        self.add(splice)
         
     def add_flag(self,flag,frag_name):
         self.flags[flag] += 1
@@ -503,8 +510,8 @@ class Hit(object):
         
         return flags,counts
         
-    #def add(self,read,A,B,dist,ov,strandmatch,signal,n_hits,weight):
     def add(self,splice):
+        print self.name,self.coord,splice.junc_span,self.counts
         self.signal = splice.gtag
         
         # TODO: this belongs to output, not here!
@@ -518,55 +525,57 @@ class Hit(object):
         self.edits.append(splice.dist)
         self.overlaps.append(splice.ov)
         self.n_hits.append(splice.n_hits)
-        self.counts += splice.junc_span.weight
-
-        # TODO: Move this logic into JunctionSpan, bc it is closer to the underlying alignments
-        # by convention have A precede B in the genome.
-        A = splice.junc_span.align_A
-        B = splice.junc_span.align_B
-        read = splice.junc_span.primary.seq
-        weight = splice.junc_span.weight
-        if splice.is_backsplice:
-            A,B = B,A
-
-        # Alignment Score - Secondbest hit score            
-        aopt = dict(A.tags)
-        bopt = dict(B.tags)
-        qA = aopt.get('AS') - aopt.get('XS',minmapscore)
-        qB = bopt.get('AS') - bopt.get('XS',minmapscore)
-
-        if qA and qB:
-            # both anchors from the *same read* align uniquely
-            self.uniq_bridges += weight
-
-        self.mapquals_A.append(qA)
-        self.mapquals_B.append(qB)
-
-        # recover the original readname 
-        # ('__' is forbidden in input read names!)
-        if '__' in A.qname:
-            qname = A.qname.split('__')[0][:-2]
-        else: # reads have been swapped at some point
-            qname = B.qname.split('__')[0][:-2]
-
-        self.readnames.append(qname)
         
-        # record the spliced read sequence as it was before mapping
-        if A.is_reverse:
-            self.strand_minus += weight
-            self.reads.append(rev_comp(read))
-        else:
-            self.strand_plus += weight
-            self.reads.append(read)
+        if splice.junc_span:
+            self.counts += splice.junc_span.weight
 
-        sample_name = options.name
-        self.tissues[sample_name] += weight
-        
-        self.uniq.add((read,sample_name))
-        self.uniq.add((rev_comp(read),sample_name))
+            # TODO: Move this logic into JunctionSpan, bc it is closer to the underlying alignments
+            # by convention have A precede B in the genome.
+            A = splice.junc_span.align_A
+            B = splice.junc_span.align_B
+            read = splice.junc_span.primary.seq
+            weight = splice.junc_span.weight
+            if splice.is_backsplice:
+                A,B = B,A
 
+            # Alignment Score - Secondbest hit score            
+            aopt = dict(A.tags)
+            bopt = dict(B.tags)
+            qA = aopt.get('AS') - aopt.get('XS',minmapscore)
+            qB = bopt.get('AS') - bopt.get('XS',minmapscore)
+
+            if qA and qB:
+                # both anchors from the *same read* align uniquely
+                self.uniq_bridges += weight
+
+            self.mapquals_A.append(qA)
+            self.mapquals_B.append(qB)
+
+            # recover the original readname 
+            # ('__' is forbidden in input read names!)
+            if '__' in A.qname:
+                qname = A.qname.split('__')[0][:-2]
+            else: # reads have been swapped at some point
+                qname = B.qname.split('__')[0][:-2]
+
+            self.readnames.append(qname)
+            
+            # record the spliced read sequence as it was before mapping
+            if A.is_reverse:
+                self.strand_minus += weight
+                self.reads.append(rev_comp(read))
+            else:
+                self.strand_plus += weight
+                self.reads.append(read)
+
+            sample_name = options.name
+            self.tissues[sample_name] += weight
+            
+            self.uniq.add((read,sample_name))
+            self.uniq.add((rev_comp(read),sample_name))
 
     def scores(self,chrom,start,end,sense):
+        #print self.name,self.coord,self.mapquals_A
         n_spanned = len(self.reads)
         n_uniq = len(self.uniq) / 2
         #print sorted(self.mapquals_A,reverse=True)
@@ -578,53 +587,151 @@ class Hit(object):
         tissues = sorted(self.tissues.keys())
         tiss_counts = [str(self.tissues[k]) for k in tissues]
         return (n_spanned,self.counts,n_uniq,best_qual_A,best_qual_B,self.uniq_bridges,tissues,tiss_counts,min(self.edits),min(self.overlaps),min(self.n_hits),self.signal,self.strandmatch)
-                
-circ_splices = defaultdict(Hit)
-linear_splices = defaultdict(Hit)
 
-N = defaultdict(float)
 
-class MultiEventStorage(object):
-    def __init__(self):
-        self.circ_extra_events = defaultdict(list)
-    
-    def add(self,circ_key,lin_junctions,unspliced):
-        extra_lin_events = sorted(lin_junctions)
-        extra_unspliced = sorted(unspliced)
+class SpliceSiteStorage(object):
+    def __init__(self, prefix, known):
+        self.prefix = prefix
+        self.sites = {}
+        self.novel_count = 0
+        if known:
+            self.load_known_sites(known)
 
-        self.circ_extra_events[circ_key].append( (extra_lin_events,extra_unspliced) )
-               
-    def output(self):
-        lines = []
-        for circ_key in sorted(self.circ_extra_events.keys()):
-            circ_chrom,circ_start,circ_end,circ_sense = circ_key
-            circ_cols = [str(c) for c in circ_key]
+    def load_known_sites(self,fname):
+        for line in file(fname):
+            if line.startswith('#'):
+                continue
+            parts = line.rstrip().split('\t')
+            chrom,start,end,name,score,sense = parts[:6] # BED6
+            start = int(start)
+            end = int(end)
             
-            for extra_lin_events,extra_unspliced in self.circ_extra_events[circ_key]:
-           
-                if not extra_lin_events:
-                    lin_col = ["N/A"]
-                else:
-                    lin_col = [",".join([ "{0:d}-{1:d}".format(start,end) for chrom,start,end,sense in extra_lin_events])]
-                    
-                if not extra_unspliced:
-                    un_col = ["N/A"]
-                else:
-                    unlist = []
-                    for chrom,start,end,sense in extra_unspliced:
-                        if chrom == circ_chrom and (start + options.asize > circ_start) and (end - options.asize < circ_end):
-                            unlist.append( "{0:d}-{1:d}".format(start,end) )
-                        else:
-                            unlist.append( "[{0:s}:{1:d}-{2:d}]".format(chrom,start,end) )
-                    un_col = [",".join(unlist)]
-                    
-                    
-                lines.append("\t".join(circ_cols + lin_col + un_col))
-                
-        return "\n".join(lines)
-                
-multi_event_storage = MultiEventStorage()
+            coord = (chrom,start,end,sense)
+            self.sites[coord] = Hit(name,Splice(None,chrom,start,end,sense,10,10,'NNNN'))
+        
+    def add(self,splice):
+        coord = splice.coord
+        if not coord in self.sites:
+            self.novel_count += 1
+            name = "{0}_{1}_{2:06d}".format(options.name,self.prefix,self.novel_count)
+            self.sites[coord] = Hit(name,splice)
+        else:
+            self.sites[coord].add(splice)
 
+        return self.sites[coord]
+
+    def __getitem__(self,coord):
+        return self.sites[coord]
+
+    def store_list(self):
+        sites_file.write("#" + "\t".join(['chrom','start','end','name','counts','strand','n_spanned','n_uniq','uniq_bridges','best_qual_left','best_qual_right','tissues','tiss_counts','edits','anchor_overlap','breakpoints','signal','strandmatch','category']) + "\n")
+        n = 1
+        for (chrom,start,end,sense),hit in self.sites.items():
+            if hit.counts == 0.:
+                continue # a known splice site that was not recovered here
+            n_spanned,counts,n_uniq,best_qual_A,best_qual_B,uniq_bridges,tissues,tiss_counts,min_edit,min_anchor_ov,n_hits,signal,strandmatch = hit.scores(chrom,start,end,sense)
+
+            if options.halfunique:
+                if (best_qual_A < options.min_uniq_qual) and (best_qual_B < options.min_uniq_qual):
+                    N['anchor_not_uniq'] += 1
+                    continue
+            else:
+                if (best_qual_A < options.min_uniq_qual) or (best_qual_B < options.min_uniq_qual):
+                    N['anchor_not_uniq'] += 1
+                    continue
+
+            if (uniq_bridges == 0) and not options.report_nobridges:
+                    N['no_uniq_bridges'] += 1
+                    continue
+
+            n += 1
+            
+            ## Store the reads associated with this hit. 
+            ## TODO: We could also do this right away, when registering the read...
+            for r_seq,ori_name in zip(hit.reads,hit.readnames):
+                
+                flags = hit.read_flags.get(ori_name)
+                if flags:
+                    flag_str = ",".join(sorted(flags))
+                else:
+                    flag_str = "BACKSPLICE"
+                reads_file.write(">%s %s %s\n%s\n" % (ori_name,hit.name,r_seq,flag_str))
+        
+            categories = []
+            if signal == "GTAG":
+                categories.append("CANONICAL")
+            if strandmatch == "MATCH":
+                categories.append("STRANDMATCH")
+            if best_qual_A > 0 and best_qual_B > 0 and uniq_bridges > 0:
+                categories.append("ANCHOR_UNIQUE")
+            if uniq_bridges == 0:
+                categories.append("NO_UNIQ_BRIDGES")          
+            if n_hits == 1:
+                categories.append("UNAMBIGUOUS_BP")
+            if min_anchor_ov == 0 and min_edit == 0: 
+                categories.append("PERFECT_EXT")
+            elif min_anchor_ov <= 1 and min_edit <= 1:
+                categories.append("GOOD_EXT")
+            elif min_anchor_ov <= 2 and min_edit <= 2:
+                categories.append("OK_EXT")
+
+            if not categories:
+                categories.append("DUBIOUS")
+
+            if self.prefix == "circ":
+                categories.append("CIRCULAR")
+            else:
+                categories.append("LINEAR")
+
+            if end-start < options.short_threshold:
+                categories.append("SHORT")
+            elif end-start > options.huge_threshold:
+                categories.append("HUGE")
+
+            flags,flag_counts = hit.get_flags_counts()
+            
+            bed = [
+                chrom,start,end,hit.name,counts,sense, # BED6 compatible
+                n_spanned,n_uniq,uniq_bridges,best_qual_A,best_qual_B, # mapping reliability
+                ",".join(tissues),",".join(tiss_counts), # sample association
+                min_edit,min_anchor_ov,n_hits,signal,strandmatch,",".join(sorted(categories) ), # splice site detection reliability
+                ",".join(flags),",".join([str(c) for c in flag_counts]), # internal structure support from fragment evidence (BWA MEM)
+            ]
+            sites_file.write("\t".join([str(b) for b in bed]) + "\n")
+
+                
+class MultiEventRecorder(object):
+    def __init__(self):
+        pass
+    
+    def record(self,circ_hit,lin_cons,lin_incons,unspliced_cons,unspliced_incons):
+        
+        score = len(lin_cons) - 10 * len(lin_incons) + len(unspliced_cons) - 10 * len(unspliced_incons)
+        circ_chrom,circ_start,circ_end,circ_sense = circ_hit.coord
+        cols = [circ_chrom, str(circ_start), str(circ_end), "ME:"+circ_hit.name, str(score), circ_sense]
+        
+        if not lin_cons:
+            cols.append("NO_LIN_CONS")
+        else:
+            cols.append(",".join([ "{0:d}-{1:d}".format(start,end) for chrom,start,end,sense in lin_cons]))
+
+        if not lin_incons:
+            cols.append("NO_LIN_INCONS")
+        else:
+            cols.append(",".join([ "[{0:s}:{1:d}-{2:d}]".format(chrom,start,end) for chrom,start,end,sense in lin_incons]))
+                
+        if not unspliced_cons:
+            cols.append("NO_UNSPLICED_CONS")
+        else:
+            cols.append(",".join([ "{0:d}-{1:d}".format(start,end) for chrom,start,end,sense in unspliced_cons]))
+
+        if not unspliced_incons:
+            cols.append("NO_UNSPLICED_INCONS")
+        else:
+            cols.append(",".join([ "[{0:s}:{1:d}-{2:d}]".format(chrom,start,end) for chrom,start,end,sense in unspliced_incons]))
+                
+        multi_file.write('\t'.join(cols) + '\n')
+        
 
 class Splice(object):
     def __init__(self,junc_span,chrom,start,end,strand,dist,ov,gtag):
@@ -779,9 +886,10 @@ class JunctionSpan(object):
                         strand = '+'
 
                 if is_backsplice:
-                    # for circs we need to correct here
-                    start += 1
+                    # small correction when projecting back to genome
                     end -= 1
+                else:
+                    start -= 1
                                 
                 if options.noncanonical:
                     hits.append( Splice(self,chrom,start,end,'+',dist,ov,gtag,) )
@@ -964,6 +1072,12 @@ class MateSegments(object):
         if bam_out:
             bam_out.write(seg_b)
 
+circ_splices = SpliceSiteStorage("circ",options.known_circ)
+linear_splices = SpliceSiteStorage("lin",options.known_lin)
+multi_events = MultiEventRecorder()
+
+N = defaultdict(float)
+
 
 def record_hits(frag_name, circ_junc_spans, linear_junc_spans, unspliced_mates, seg_broken):
     """
@@ -981,7 +1095,7 @@ def record_hits(frag_name, circ_junc_spans, linear_junc_spans, unspliced_mates, 
             frag_name,len(circ_junc_spans),len(linear_junc_spans),len(unspliced_mates),len(seg_broken) )
 
     # record all observed backsplice events
-    circ_junctions = set()
+    circ_coords = set()
     for junc_span in circ_junc_spans:
         splices = junc_span.find_breakpoints()
 
@@ -993,34 +1107,36 @@ def record_hits(frag_name, circ_junc_spans, linear_junc_spans, unspliced_mates, 
 
         N['circ_spliced'] += 1
         for splice in splices:
-            circ_splices[splice.coord].add(splice)
-            circ_junctions.add(splice.coord)
+            circ = circ_splices.add(splice)
+            circ_coords.add(circ.coord)
             
             if not options.allhits:
                 break
 
-    if len(circ_junctions) > 1:
-        for coord in circ_junctions:
+    if len(circ_coords) > 1:
+        for coord in circ_coords:
             circ_splices[coord].add_flag('WARN_MULTI_BACKSPLICE',frag_name)
         return
 
-    if not circ_junctions and options.nolinear:
+    if not circ_coords and options.nolinear:
         return
 
     # we are sure now, that there is exactly one circ junction in the fragment.
     # now we can start flagging this junction with SUPPORT or WARNINGs, depending
     # on what the other mates, splices, and segments do.
-    circ_coord = circ_junctions.pop()
+    circ_coord = circ.coord
     circ_chrom,circ_start,circ_end,circ_strand = circ_coord
     circ_junc_span = circ_junc_spans[0]
-    circ_hit = circ_splices[circ_coord]
 
     if len(circ_junc_spans) > 1:
+        # we had multiple splices covering the same junction 
+        # in one fragment, i.e. the fragment went "around" the circ.
+        # Let's call this a "closure".
         warns.add('SUPPORT_CLOSURE')
 
     # record all observed linear events
-    lin_consistent = set()
-    lin_inconsistent = set()
+    lin_cons = set()
+    lin_incons = set()
 
     for junc_span in linear_junc_spans:
         splices = junc_span.find_breakpoints()
@@ -1033,25 +1149,25 @@ def record_hits(frag_name, circ_junc_spans, linear_junc_spans, unspliced_mates, 
 
         N['lin_spliced'] += 1
         for splice in splices:
-            linear_splices[splice.coord].add(splice)
+            linear_splices.add(splice)
             
             if splice.start <= circ_start or splice.end >= circ_end:
                 warns.add('WARN_OUTSIDE_SPLICE_JUNCTION')
-                lin_inconsistent.add(splice.coord)
+                lin_incons.add(splice.coord)
             else:
-                lin_consistent.add(splice.coord)
+                lin_cons.add(splice.coord)
                 warns.add('SUPPORT_INSIDE_SPLICE_JUNCTION')
             
             if not options.allhits:
                 break 
 
     # investigate unspliced mates
-    unspliced_consistent = set()
-    unspliced_inconsistent = set()
+    unspliced_cons = set()
+    unspliced_incons = set()
     for align in unspliced_mates:
         # TODO: fix strand handling of fr, ff, rr, rf mates.
         #if align.is_reverse != circ_junc_span.primary.is_reverse:
-            #circ_hit.add_flag('WARN_OTHER_STRAND_MATE',frag_name)
+            #circ.add_flag('WARN_OTHER_STRAND_MATE',frag_name)
 
         strand = '*'
         chrom = fast_chrom_lookup(align)
@@ -1059,30 +1175,30 @@ def record_hits(frag_name, circ_junc_spans, linear_junc_spans, unspliced_mates, 
 
         if circ_junc_span.primary.tid != align.tid:
             warns.add('WARN_OTHER_CHROM_MATE')
-            unspliced_inconsistent.add( coord )
+            unspliced_incons.add( coord )
 
         # test if unspliced reads fall within the circ
         # allow for [anchor-length] nucleotides to lie outside, as these may simply
         # have failed to be soft-clipped/spliced.
         elif align.pos + options.asize <= circ_start or align.aend - options.asize >= circ_end:
             warns.add('WARN_OUTSIDE_MATE')
-            unspliced_inconsistent.add( coord )
+            unspliced_incons.add( coord )
         else:
             warns.add('SUPPORT_INSIDE_MATE')
-            unspliced_consistent.add( coord )
+            unspliced_cons.add( coord )
 
     if seg_broken:
         warns.add('WARN_BROKEN_SEGMENTS')
 
     if options.debug:
-        print "record_hits(",circ_coord,") linear: ",sorted(lin_consistent),sorted(lin_inconsistent)," unspliced",sorted(unspliced_consistent),sorted(unspliced_inconsistent)
+        print "record_hits(",circ_coord,") linear: ",sorted(lin_cons),sorted(lin_incons)," unspliced",sorted(unspliced_cons),sorted(unspliced_incons)
 
-    if (unspliced_consistent or unspliced_inconsistent or lin_consistent or lin_inconsistent) and options.multi_events:
+    if (unspliced_cons or unspliced_incons or lin_cons or lin_incons) and options.multi_events:
         # we have a multi-splicing event!
-        multi_event_storage.add(circ_coord, lin_consistent, lin_inconsistent, unspliced_consistent, unspliced_inconsistent)
+        multi_events.record(circ, lin_cons, lin_incons, unspliced_cons, unspliced_incons)
 
     for w in warns:
-        circ_hit.add_flag(w,frag_name)
+        circ.add_flag(w,frag_name)
 
     if options.debug:
         print "fragment:",frag_name,warns
@@ -1227,83 +1343,6 @@ def main():
     krps = float(n_reads)/(t1 - t0)/1000.
     logger.info("processed {M_reads:.2f}M (paired-end) reads in {mins:.1f} minutes (overall {krps:.2f}k reads/second on average)".format(**locals()))
 
-def output(cand,prefix):
-    sites_file.write("#" + "\t".join(['chrom','start','end','name','counts','strand','n_spanned','n_uniq','uniq_bridges','best_qual_left','best_qual_right','tissues','tiss_counts','edits','anchor_overlap','breakpoints','signal','strandmatch','category']) + "\n")
-    n = 1
-    for c,hit in cand.items():
-        #print c,hit
-        chrom,start,end,sense = c
-        n_spanned,counts,n_uniq,best_qual_A,best_qual_B,uniq_bridges,tissues,tiss_counts,min_edit,min_anchor_ov,n_hits,signal,strandmatch = hit.scores(chrom,start,end,sense)
-
-        if options.halfunique:
-            if (best_qual_A < options.min_uniq_qual) and (best_qual_B < options.min_uniq_qual):
-                N['anchor_not_uniq'] += 1
-                continue
-        else:
-            if (best_qual_A < options.min_uniq_qual) or (best_qual_B < options.min_uniq_qual):
-                N['anchor_not_uniq'] += 1
-                continue
-
-        if (uniq_bridges == 0) and not options.report_nobridges:
-                N['no_uniq_bridges'] += 1
-                continue
-
-        name = "%s_%s_%06d" % (options.name,prefix,n)
-        n += 1
-        
-        ## Store the reads associated with this hit. 
-        ## TODO: We could also do this right away, when registering the read...
-        for r_seq,ori_name in zip(hit.reads,hit.readnames):
-            
-            flags = hit.read_flags.get(ori_name)
-            if flags:
-                flag_str = ",".join(sorted(flags))
-            else:
-                flag_str = "BACKSPLICE"
-            reads_file.write(">%s %s %s\n%s\n" % (ori_name,name,r_seq,flag_str))
-      
-        categories = []
-        if signal == "GTAG":
-            categories.append("CANONICAL")
-        if strandmatch == "MATCH":
-            categories.append("STRANDMATCH")
-        if best_qual_A > 0 and best_qual_B > 0 and uniq_bridges > 0:
-            categories.append("ANCHOR_UNIQUE")
-        if uniq_bridges == 0:
-            categories.append("NO_UNIQ_BRIDGES")          
-        if n_hits == 1:
-            categories.append("UNAMBIGUOUS_BP")
-        if min_anchor_ov == 0 and min_edit == 0: 
-            categories.append("PERFECT_EXT")
-        elif min_anchor_ov <= 1 and min_edit <= 1:
-            categories.append("GOOD_EXT")
-        elif min_anchor_ov <= 2 and min_edit <= 2:
-            categories.append("OK_EXT")
-
-        if not categories:
-            categories.append("DUBIOUS")
-
-        if prefix == "circ":
-            categories.append("CIRCULAR")
-        else:
-            categories.append("LINEAR")
-
-        if end-start < options.short_threshold:
-            categories.append("SHORT")
-        elif end-start > options.huge_threshold:
-            categories.append("HUGE")
-
-        flags,flag_counts = hit.get_flags_counts()
-        
-        bed = [
-            chrom,start-1,end,name,counts,sense, # BED6 compatible
-            n_spanned,n_uniq,uniq_bridges,best_qual_A,best_qual_B, # mapping reliability
-            ",".join(tissues),",".join(tiss_counts), # sample association
-            min_edit,min_anchor_ov,n_hits,signal,strandmatch,",".join(sorted(categories) ), # splice site detection reliability
-            ",".join(flags),",".join([str(c) for c in flag_counts]), # internal structure support from fragment evidence (BWA MEM)
-        ]
-        sites_file.write("\t".join([str(b) for b in bed]) + "\n")
-
 
 if options.profile:
     import cProfile
@@ -1312,6 +1351,5 @@ else:
     main()
 
 stats_file.write(str(N)+"\n")
-output(circ_splices,"circ")
-output(linear_splices,"norm")
-multi_file.write(multi_event_storage.output())
+circ_splices.store_list()
+linear_splices.store_list()
