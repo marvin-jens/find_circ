@@ -10,6 +10,13 @@ import pysam
 import optparse
 import traceback
 
+__version__ = "1.99"
+__author__ = "Marvin Jens"
+__credits__ = ["Marvin Jens","Marcel Schilling","Petar Glazar","Nikolaus Rajewsky"]
+__status__ = "beta"
+__licence__ = "GPL"
+__email__ = "marvin.jens@mdc-berlin.de"
+
 COMPLEMENT = {
     'a' : 't',
     't' : 'a',
@@ -379,10 +386,10 @@ parser.add_option("-G","--genome",dest="genome",type=str,default="",help="path t
 parser.add_option("","--known-circ",dest="known_circ",type=str,default="",help="file with known circRNA junctions (BED6)")
 parser.add_option("","--known-lin",dest="known_lin",type=str,default="",help="file with known linear splice junctions (BED6)")
 parser.add_option("-o","--output",dest="output",default="find_circ_run",help="where to store output")
-parser.add_option("","--stdout",dest="stdout",default=None,choices=['sites','reads','stats','multi'],help="use to direct chosen type of output (sites, reads, stats, multi) to stdout instead of file")
+parser.add_option("-q","--silent",dest="silent",default=False,action="store_true",help="suppress any normal output to stdout. Automatically switched on when using --stdout redirection")
+parser.add_option("","--stdout",dest="stdout",default=None,choices=['circs','lins','reads','stats','multi'],help="use to direct chosen type of output (sites, reads, stats, multi) to stdout instead of file")
 parser.add_option("-n","--name",dest="name",default="unknown",help="tissue/sample name to use (default='unknown')")
-#parser.add_option("-p","--prefix",dest="prefix",default="",help="prefix to prepend to each junction name (default='')")
-parser.add_option("-q","--min-uniq-qual",dest="min_uniq_qual",type=int,default=1,help="minimal uniqness for anchor alignments (default=2)")
+parser.add_option("","--min-uniq-qual",dest="min_uniq_qual",type=int,default=1,help="minimal uniqness for anchor alignments (default=2)")
 parser.add_option("-a","--anchor",dest="asize",type=int,default=15,help="anchor size (default=15)")
 parser.add_option("-m","--margin",dest="margin",type=int,default=2,help="maximum nts the BP is allowed to reside within a segment (default=2)")
 parser.add_option("-d","--max-mismatch",dest="maxdist",type=int,default=2,help="maximum mismatches (no indels) allowed in segment extensions (default=2)")
@@ -390,18 +397,13 @@ parser.add_option("","--short-threshold",dest="short_threshold",type=int,default
 parser.add_option("","--huge-threshold",dest="huge_threshold",type=int,default=100000,help="maximal genomic span [nt] of a circRNA before it is labeled HUGE (default=100000)")
 parser.add_option("","--debug",dest="debug",default=False,action="store_true",help="Activate LOTS of debug output")
 parser.add_option("","--profile",dest="profile",default=False,action="store_true",help="Activate performance profiling")
-
 parser.add_option("","--non-canonical",dest="noncanonical",default=False,action="store_true",help="relax the GU/AG constraint (will produce many more ambiguous counts)")
-parser.add_option("","--randomize",dest="randomize",default=False,action="store_true",help="select randomly from tied, best, ambiguous hits")
 parser.add_option("","--all-hits",dest="allhits",default=False,action="store_true",help="in case of ambiguities, report each hit")
 parser.add_option("","--stranded",dest="stranded",default=False,action="store_true",help="use if the reads are stranded. By default it will be used as control only, use with --strand-pref for breakpoint disambiguation.")
 parser.add_option("","--strand-pref",dest="strandpref",default=False,action="store_true",help="prefer splice sites that match annotated direction of transcription")
 parser.add_option("","--half-unique",dest="halfunique",default=False,action="store_true",help="also report junctions where only one anchor aligns uniquely (less likely to be true)")
 parser.add_option("","--report-nobridges",dest="report_nobridges",default=False,action="store_true",help="also report junctions lacking at least a single read where both anchors, jointly align uniquely (not recommended. Much less likely to be true.)")
-
-#parser.add_option("-R","--reads",dest="reads",default=False,help="write spliced reads to this file instead of stderr (RECOMMENDED!)")
 parser.add_option("-B","--bam",dest="bam",default=False,action="store_true",help="store anchor alignments that were recorded as linear or circular junction candidates")
-
 parser.add_option("-t","--throughput",dest="throughput",default=False,action="store_true",help="print information on throughput to stderr (useful for benchmarking)")
 parser.add_option("","--chunk-size",dest="chunksize",type=int,default=100000,help="number of reads to be processed in one chunk (default=100000)")
 parser.add_option("","--noop",dest="noop",default=False,action="store_true",help="Do not search for any junctions. Only process the alignment stream (useful for benchmarking)")
@@ -409,10 +411,8 @@ parser.add_option("","--no-linear",dest="nolinear",default=False,action="store_t
 parser.add_option("","--no-multi",dest="multi_events",default=True,action="store_false",help="Do not record multi-events (saves some time)")
 options,args = parser.parse_args()
 
-
-
 if options.version:
-    print """find_circ.py version 1.99\n\n(c) Marvin Jens 2012-2016.\nCheck http://www.circbase.org for more information."""
+    print """find_circ.py version {0}\n\n(c) Marvin Jens 2012-2016.\nCheck http://www.circbase.org for more information.""".format(__version__)
     sys.exit(0)
 
 if options.system:
@@ -430,12 +430,14 @@ if not (options.genome or options.system):
 # prepare logging system
 logging.basicConfig(level=logging.INFO,filename=os.path.join(options.output,"run.log"),filemode='w')
 logger = logging.getLogger('find_circ')
+logger.info("find_circ {0} invoked as '{1}'".format(__version__," ".join(sys.argv)))
 
 # prepare output files
 if not os.path.isdir(options.output):
     os.mkdir(options.output)
 
-sites_file = file(os.path.join(options.output,"splice_sites.bed"),"w")
+circs_file = file(os.path.join(options.output,"circ_splice_sites.bed"),"w")
+lins_file  = file(os.path.join(options.output,"lin_splice_sites.bed"),"w")
 reads_file = file(os.path.join(options.output,"spliced_reads.fa"),"w")
 stats_file = file(os.path.join(options.output,"stats.log"),"w")
 multi_file = file(os.path.join(options.output,"multi_events.tsv"),"w")
@@ -511,7 +513,7 @@ class Hit(object):
         return flags,counts
         
     def add(self,splice):
-        print self.name,self.coord,splice.junc_span,self.counts
+        #print self.name,self.coord,splice.junc_span,self.counts
         self.signal = splice.gtag
         
         # TODO: this belongs to output, not here!
@@ -528,7 +530,6 @@ class Hit(object):
         
         if splice.junc_span:
             self.counts += splice.junc_span.weight
-
             # TODO: Move this logic into JunctionSpan, bc it is closer to the underlying alignments
             # by convention have A precede B in the genome.
             A = splice.junc_span.align_A
@@ -573,21 +574,51 @@ class Hit(object):
             
             self.uniq.add((read,sample_name))
             self.uniq.add((rev_comp(read),sample_name))
-
-    def scores(self,chrom,start,end,sense):
+        
+    def scores(self):
         #print self.name,self.coord,self.mapquals_A
         n_spanned = len(self.reads)
         n_uniq = len(self.uniq) / 2
         #print sorted(self.mapquals_A,reverse=True)
         #print sorted(self.mapquals_B,reverse=True)
-        best_qual_A = sorted(self.mapquals_A,reverse=True)[0]
-        best_qual_B = sorted(self.mapquals_B,reverse=True)[0]
+        self.best_qual_A = sorted(self.mapquals_A,reverse=True)[0]
+        self.best_qual_B = sorted(self.mapquals_B,reverse=True)[0]
 
         #print self.edits,self.overlaps,self.n_hits
         tissues = sorted(self.tissues.keys())
         tiss_counts = [str(self.tissues[k]) for k in tissues]
-        return (n_spanned,self.counts,n_uniq,best_qual_A,best_qual_B,self.uniq_bridges,tissues,tiss_counts,min(self.edits),min(self.overlaps),min(self.n_hits),self.signal,self.strandmatch)
+        return (n_spanned,self.counts,n_uniq,self.best_qual_A,self.best_qual_B,self.uniq_bridges,tissues,tiss_counts,min(self.edits),min(self.overlaps),min(self.n_hits),self.signal,self.strandmatch)
 
+    def categories(self):
+        categories = []
+        if self.signal != "GTAG":
+            categories.append("NON_CANONICAL")
+        #if strandmatch == "MATCH":
+            #categories.append("STRANDMATCH")
+        if self.best_qual_A == 0 or self.best_qual_B == 0:
+            categories.append("WARN_NON_UNIQUE_ANCHOR")
+        if self.uniq_bridges == 0:
+            categories.append("WARN_NO_UNIQ_BRIDGES")          
+        if min(self.n_hits) > 1:
+            categories.append("WARN_AMBIGUOUS_BP")
+
+        min_anchor_ov = min(self.overlaps)
+        min_edit = min(self.edits)
+        
+        if min_anchor_ov == 0 and min_edit == 0: 
+            pass
+        elif min_anchor_ov < 2 and min_edit < 2:
+            categories.append("WARN_EXT_1MM")
+        elif min_anchor_ov >= 2 or min_edit >= 2:
+            categories.append("WARN_EXT_2MM+")
+
+        chrom,start,end,sense = self.coord
+        if end-start < options.short_threshold:
+            categories.append("SHORT")
+        elif end-start > options.huge_threshold:
+            categories.append("HUGE")
+
+        return categories
 
 class SpliceSiteStorage(object):
     def __init__(self, prefix, known):
@@ -598,6 +629,7 @@ class SpliceSiteStorage(object):
             self.load_known_sites(known)
 
     def load_known_sites(self,fname):
+        n = 0
         for line in file(fname):
             if line.startswith('#'):
                 continue
@@ -608,6 +640,9 @@ class SpliceSiteStorage(object):
             
             coord = (chrom,start,end,sense)
             self.sites[coord] = Hit(name,Splice(None,chrom,start,end,sense,10,10,'NNNN'))
+            n += 1
+            
+        logger.info("loaded {0} known splice sites from '{1}'".format(n,fname))
         
     def add(self,splice):
         coord = splice.coord
@@ -623,13 +658,13 @@ class SpliceSiteStorage(object):
     def __getitem__(self,coord):
         return self.sites[coord]
 
-    def store_list(self):
-        sites_file.write("#" + "\t".join(['chrom','start','end','name','counts','strand','n_spanned','n_uniq','uniq_bridges','best_qual_left','best_qual_right','tissues','tiss_counts','edits','anchor_overlap','breakpoints','signal','strandmatch','category']) + "\n")
-        n = 1
+    def store_list(self,output):
+        output.write("#" + "\t".join(['chrom','start','end','name','counts','strand','n_spanned','n_uniq','uniq_bridges','best_qual_left','best_qual_right','tissues','tiss_counts','edits','anchor_overlap','breakpoints','signal','strandmatch','category']) + "\n")
+
         for (chrom,start,end,sense),hit in self.sites.items():
             if hit.counts == 0.:
                 continue # a known splice site that was not recovered here
-            n_spanned,counts,n_uniq,best_qual_A,best_qual_B,uniq_bridges,tissues,tiss_counts,min_edit,min_anchor_ov,n_hits,signal,strandmatch = hit.scores(chrom,start,end,sense)
+            n_spanned,counts,n_uniq,best_qual_A,best_qual_B,uniq_bridges,tissues,tiss_counts,min_edit,min_anchor_ov,n_hits,signal,strandmatch = hit.scores()
 
             if options.halfunique:
                 if (best_qual_A < options.min_uniq_qual) and (best_qual_B < options.min_uniq_qual):
@@ -643,51 +678,8 @@ class SpliceSiteStorage(object):
             if (uniq_bridges == 0) and not options.report_nobridges:
                     N['no_uniq_bridges'] += 1
                     continue
-
-            n += 1
-            
-            ## Store the reads associated with this hit. 
-            ## TODO: We could also do this right away, when registering the read...
-            for r_seq,ori_name in zip(hit.reads,hit.readnames):
-                
-                flags = hit.read_flags.get(ori_name)
-                if flags:
-                    flag_str = ",".join(sorted(flags))
-                else:
-                    flag_str = "BACKSPLICE"
-                reads_file.write(">%s %s %s\n%s\n" % (ori_name,hit.name,r_seq,flag_str))
-        
-            categories = []
-            if signal == "GTAG":
-                categories.append("CANONICAL")
-            if strandmatch == "MATCH":
-                categories.append("STRANDMATCH")
-            if best_qual_A > 0 and best_qual_B > 0 and uniq_bridges > 0:
-                categories.append("ANCHOR_UNIQUE")
-            if uniq_bridges == 0:
-                categories.append("NO_UNIQ_BRIDGES")          
-            if n_hits == 1:
-                categories.append("UNAMBIGUOUS_BP")
-            if min_anchor_ov == 0 and min_edit == 0: 
-                categories.append("PERFECT_EXT")
-            elif min_anchor_ov <= 1 and min_edit <= 1:
-                categories.append("GOOD_EXT")
-            elif min_anchor_ov <= 2 and min_edit <= 2:
-                categories.append("OK_EXT")
-
-            if not categories:
-                categories.append("DUBIOUS")
-
-            if self.prefix == "circ":
-                categories.append("CIRCULAR")
-            else:
-                categories.append("LINEAR")
-
-            if end-start < options.short_threshold:
-                categories.append("SHORT")
-            elif end-start > options.huge_threshold:
-                categories.append("HUGE")
-
+                    
+            categories = hit.categories()
             flags,flag_counts = hit.get_flags_counts()
             
             bed = [
@@ -697,7 +689,7 @@ class SpliceSiteStorage(object):
                 min_edit,min_anchor_ov,n_hits,signal,strandmatch,",".join(sorted(categories) ), # splice site detection reliability
                 ",".join(flags),",".join([str(c) for c in flag_counts]), # internal structure support from fragment evidence (BWA MEM)
             ]
-            sites_file.write("\t".join([str(b) for b in bed]) + "\n")
+            output.write("\t".join([str(b) for b in bed]) + "\n")
 
                 
 class MultiEventRecorder(object):
@@ -1090,6 +1082,8 @@ def record_hits(frag_name, circ_junc_spans, linear_junc_spans, unspliced_mates, 
     global circ_splices, linear_splices
     
     warns = set()
+    junctions = set()
+    
     if options.debug:
         print ">record_hits({0}) #circ_junc_spans={1} #lin_junc_spans={2} #unspliced_mates={3} #seg_broken={4}".format(
             frag_name,len(circ_junc_spans),len(linear_junc_spans),len(unspliced_mates),len(seg_broken) )
@@ -1109,30 +1103,36 @@ def record_hits(frag_name, circ_junc_spans, linear_junc_spans, unspliced_mates, 
         for splice in splices:
             circ = circ_splices.add(splice)
             circ_coords.add(circ.coord)
-            
+            junctions.add(circ)
             if not options.allhits:
                 break
 
     if len(circ_coords) > 1:
         for coord in circ_coords:
-            circ_splices[coord].add_flag('WARN_MULTI_BACKSPLICE',frag_name)
-        return
+            warns.add('WARN_MULTI_BACKSPLICE')
+            circ = circ_splices[coord]
+            circ.add_flag('WARN_MULTI_BACKSPLICE',frag_name)
+            junctions.add(circ)
+
+        return junctions, warns
 
     if not circ_coords and options.nolinear:
-        return
+        return junctions, warns
 
-    # we are sure now, that there is exactly one circ junction in the fragment.
-    # now we can start flagging this junction with SUPPORT or WARNINGs, depending
-    # on what the other mates, splices, and segments do.
-    circ_coord = circ.coord
-    circ_chrom,circ_start,circ_end,circ_strand = circ_coord
-    circ_junc_span = circ_junc_spans[0]
+    if circ_coords:
+        # we are sure now, that there is exactly one circ junction in the fragment.
+        # now we can start flagging this junction with SUPPORT or WARNINGs, depending
+        # on what the other mates, splices, and segments do.
 
-    if len(circ_junc_spans) > 1:
-        # we had multiple splices covering the same junction 
-        # in one fragment, i.e. the fragment went "around" the circ.
-        # Let's call this a "closure".
-        warns.add('SUPPORT_CLOSURE')
+        circ_coord = circ.coord
+        circ_chrom,circ_start,circ_end,circ_strand = circ_coord
+        circ_junc_span = circ_junc_spans[0]
+
+        if len(circ_junc_spans) > 1:
+            # we had multiple splices covering the same junction 
+            # in one fragment, i.e. the fragment went "around" the circ.
+            # Let's call this a "closure".
+            warns.add('SUPPORT_CLOSURE')
 
     # record all observed linear events
     lin_cons = set()
@@ -1149,61 +1149,72 @@ def record_hits(frag_name, circ_junc_spans, linear_junc_spans, unspliced_mates, 
 
         N['lin_spliced'] += 1
         for splice in splices:
-            linear_splices.add(splice)
-            
-            if splice.start <= circ_start or splice.end >= circ_end:
-                warns.add('WARN_OUTSIDE_SPLICE_JUNCTION')
-                lin_incons.add(splice.coord)
-            else:
-                lin_cons.add(splice.coord)
-                warns.add('SUPPORT_INSIDE_SPLICE_JUNCTION')
-            
+            lin = linear_splices.add(splice)
+            junctions.add(lin)
+
+            if circ_coords:
+                if splice.start <= circ_start or splice.end >= circ_end:
+                    warns.add('WARN_OUTSIDE_SPLICE_JUNCTION')
+                    lin_incons.add(splice.coord)
+                else:
+                    lin_cons.add(splice.coord)
+                    warns.add('SUPPORT_INSIDE_SPLICE_JUNCTION')
+                
             if not options.allhits:
                 break 
 
-    # investigate unspliced mates
-    unspliced_cons = set()
-    unspliced_incons = set()
-    for align in unspliced_mates:
-        # TODO: fix strand handling of fr, ff, rr, rf mates.
-        #if align.is_reverse != circ_junc_span.primary.is_reverse:
-            #circ.add_flag('WARN_OTHER_STRAND_MATE',frag_name)
+    if circ_coords:
+        # investigate unspliced mates
+        unspliced_cons = set()
+        unspliced_incons = set()
+        for align in unspliced_mates:
+            # TODO: fix strand handling of fr, ff, rr, rf mates.
+            #if align.is_reverse != circ_junc_span.primary.is_reverse:
+                #circ.add_flag('WARN_OTHER_STRAND_MATE',frag_name)
 
-        strand = '*'
-        chrom = fast_chrom_lookup(align)
-        coord = (chrom,align.pos,align.aend,strand)
+            strand = '*'
+            chrom = fast_chrom_lookup(align)
+            coord = (chrom,align.pos,align.aend,strand)
 
-        if circ_junc_span.primary.tid != align.tid:
-            warns.add('WARN_OTHER_CHROM_MATE')
-            unspliced_incons.add( coord )
+            if circ_junc_span.primary.tid != align.tid:
+                warns.add('WARN_OTHER_CHROM_MATE')
+                unspliced_incons.add( coord )
 
-        # test if unspliced reads fall within the circ
-        # allow for [anchor-length] nucleotides to lie outside, as these may simply
-        # have failed to be soft-clipped/spliced.
-        elif align.pos + options.asize <= circ_start or align.aend - options.asize >= circ_end:
-            warns.add('WARN_OUTSIDE_MATE')
-            unspliced_incons.add( coord )
-        else:
-            warns.add('SUPPORT_INSIDE_MATE')
-            unspliced_cons.add( coord )
+            # test if unspliced reads fall within the circ
+            # allow for [anchor-length] nucleotides to lie outside, as these may simply
+            # have failed to be soft-clipped/spliced.
+            elif align.pos + options.asize <= circ_start or align.aend - options.asize >= circ_end:
+                warns.add('WARN_OUTSIDE_MATE')
+                unspliced_incons.add( coord )
+            else:
+                warns.add('SUPPORT_INSIDE_MATE')
+                unspliced_cons.add( coord )
 
-    if seg_broken:
-        warns.add('WARN_BROKEN_SEGMENTS')
+        if seg_broken:
+            warns.add('BROKEN_SEGMENTS')
 
-    if options.debug:
-        print "record_hits(",circ_coord,") linear: ",sorted(lin_cons),sorted(lin_incons)," unspliced",sorted(unspliced_cons),sorted(unspliced_incons)
+        if options.debug:
+            print "record_hits(",circ_coord,") linear: ",sorted(lin_cons),sorted(lin_incons)," unspliced",sorted(unspliced_cons),sorted(unspliced_incons)
 
-    if (unspliced_cons or unspliced_incons or lin_cons or lin_incons) and options.multi_events:
-        # we have a multi-splicing event!
-        multi_events.record(circ, lin_cons, lin_incons, unspliced_cons, unspliced_incons)
+        if (unspliced_cons or unspliced_incons or lin_cons or lin_incons) and options.multi_events:
+            # we have a multi-splicing event!
+            multi_events.record(circ, lin_cons, lin_incons, unspliced_cons, unspliced_incons)
 
-    for w in warns:
-        circ.add_flag(w,frag_name)
+        for w in warns:
+            circ.add_flag(w,frag_name)
 
-    if options.debug:
-        print "fragment:",frag_name,warns
+        if options.debug:
+            print "fragment:",frag_name,warns
+
+    return junctions,warns
 
 
+def write_read(mate,junctions,flags):
+    flag_str = ",".join(sorted(flags))
+    junc_str = ",".join(sorted([j.name for j in junctions]))
+    reads_file.write(">%s %s %s\n%s\n" % (mate.primary.qname,junc_str,flag_str,mate.primary.seq))
+
+    
 def collected_bwa_mem_segments(sam_input):
     """
     Generator that loops over the SAM alignments. It groups alignments 
@@ -1321,9 +1332,9 @@ def main():
                 continue 
 
             if seg_circ_splices or seg_linear_splices:
-                record_hits(frag_name,seg_circ_splices,seg_linear_splices,seg_unspliced,seg_broken)
-                    
-
+                junctions,flags = record_hits(frag_name,seg_circ_splices,seg_linear_splices,seg_unspliced,seg_broken)
+                if mate1 and junctions: write_read(mate1,junctions,flags)
+                if mate2 and junctions: write_read(mate2,junctions,flags)
                 
     except KeyboardInterrupt:
         logging.warning("KeyboardInterrupt by user while processing input starting at SAM line {sam_line}".format(**locals()))
@@ -1341,7 +1352,11 @@ def main():
     M_reads = n_reads / 1E6
     mins = (t1 - t0)/60.
     krps = float(n_reads)/(t1 - t0)/1000.
-    logger.info("processed {M_reads:.2f}M (paired-end) reads in {mins:.1f} minutes (overall {krps:.2f}k reads/second on average)".format(**locals()))
+    txt = "processed {M_reads:.2f}M (paired or single end) reads in {mins:.1f} minutes (overall {krps:.2f}k reads/second on average)".format(**locals())
+    logger.info(txt)
+    if not options.silent and not options.stdout:
+        print "#",txt
+        print "# results stored in '{0}'".format(options.output)
 
 
 if options.profile:
@@ -1351,5 +1366,5 @@ else:
     main()
 
 stats_file.write(str(N)+"\n")
-circ_splices.store_list()
-linear_splices.store_list()
+circ_splices.store_list(circs_file)
+linear_splices.store_list(lins_file)
