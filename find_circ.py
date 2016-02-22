@@ -427,14 +427,14 @@ if not (options.genome or options.system):
     error("need to specify either model system database (-S) or genome FASTA file (-G).")
     sys.exit(1)
 
+# prepare output files
+if not os.path.isdir(options.output):
+    os.mkdir(options.output)
+
 # prepare logging system
 logging.basicConfig(level=logging.INFO,filename=os.path.join(options.output,"run.log"),filemode='w')
 logger = logging.getLogger('find_circ')
 logger.info("find_circ {0} invoked as '{1}'".format(__version__," ".join(sys.argv)))
-
-# prepare output files
-if not os.path.isdir(options.output):
-    os.mkdir(options.output)
 
 circs_file = file(os.path.join(options.output,"circ_splice_sites.bed"),"w")
 lins_file  = file(os.path.join(options.output,"lin_splice_sites.bed"),"w")
@@ -950,6 +950,15 @@ class MateSegments(object):
         flags = ",".join(sorted(self.seg_flags.values()))
         buf.append("\t{n_proper} proper_segs {n_oc} other_chrom {n_os} other_strand. Flags={flags}".format(**locals()) )
         
+        for seg in self.proper_segs:
+            buf.append("proper >>> %s" % seg)
+
+        for seg in self.other_chrom_segs:
+            buf.append("other chrom >>> %s" % seg)
+            
+        for seg in self.other_chrom_segs:
+            buf.append("other strand >>> %s" % seg)
+        
         return "\n".join(buf)
             
     def is_segment(self,align):
@@ -1303,17 +1312,16 @@ def main():
                 print "mate2",mate2
 
             frag_name = mate2.primary.qname
-                
-            if options.throughput:
-                if n_reads and not (n_reads % options.chunksize):
-                    t1 = time()
-                    M_reads = n_reads / 1E6
-                    mins = (t1 - t0)/60.
-                    krps = float(options.chunksize)/float(t1-t_last)/1000.
-                    #krps = float(n_reads)/(t1 - t0)/1000.
-                    sys.stderr.write("\rprocessed {M_reads:.1f}M (paired-end) reads in {mins:.1f} minutes ({krps:.2f}k reads/second)       \r".format(**locals()))
-                    t_last = t1
+            if n_reads and options.throughput and not (n_reads % options.chunksize):
+                t1 = time()
+                M_reads = n_reads / 1E6
+                mins = (t1 - t0)/60.
+                krps = float(options.chunksize)/float(t1-t_last)/1000.
+                #krps = float(n_reads)/(t1 - t0)/1000.
+                sys.stderr.write("\rprocessed {M_reads:.1f}M (paired-end) reads in {mins:.1f} minutes ({krps:.2f}k reads/second)       \r".format(**locals()))
+                t_last = t1
 
+                
             if options.noop:
                 # this is useful for optimizing throughput of alignments w/o any splice detection.
                 # It is quite fast actually, if combined with samtools -buh to have decompression
