@@ -16,6 +16,9 @@ parser = OptionParser(usage=usage)
 parser.add_option("-f","--flank",dest="flank",type=int,default=0,help="add flanking nucleotides to define more fuzzy overlap (default=0)")
 parser.add_option("-s","--stats",dest="stats",default="",help="write statistics to this file (instead of stderr)")
 parser.add_option("-6","--bed6",dest="bed6",default=False,action="store_true",help="ignore all columns except the first six standard BED columns (default=False)")
+parser.add_option("-F","--format",dest="format",default="2",choices = ["1","1.2","2"],help="select the find_circ.py outout version (choices=['1','1.2','2'])")
+parser.add_option("-V","--verbatim",dest="verbatim",default=False,action="store_true",help="do not attempt to merge all columns. Simply join on coordinates, other columns reported in verbatim")
+
 options,args = parser.parse_args()
 
 from numpy import *
@@ -48,19 +51,20 @@ N = defaultdict(int)
 
 inputs = [read_to_hash(a,flank=0) for a in args]
 names = [os.path.basename(a) for a in args]
+shorts = ["in%d" % i for i in range(len(names))]
 
-by_name = dict(zip(names,inputs))
+by_name = dict(zip(shorts,inputs))
+
 merge = {}
-support = defaultdict(set)
-
-for name,data in zip(names,inputs):
-    N['input_%s'] = len(data)
+support = defaultdict(list)
+for name,data in zip(shorts,inputs):
+    N[name] = len(data)
     merge.update(data)
     for pos in data:
-        support[pos].add(name)
+        support[pos].append(name)
 
 from collections import Counter
-comb = Counter([tuple(sorted(v)) for v in support.values()])
+comb = Counter([tuple(v) for v in support.values()])
 
 if options.stats:
     sfile = file(options.stats,"w")
@@ -70,7 +74,7 @@ else:
 for c in sorted(comb.keys()):
     sfile.write("%s\t%d\n" % ("_AND_".join(c),comb[c]))
 
-def consensus_line(lines,comb):
+def consensus_cols(lines,comb):
     samples = []
     counts = defaultdict(int)
     
@@ -126,18 +130,29 @@ def consensus_line(lines,comb):
         else:
             parts.append(append_uniq(column))
 
-    return "\t".join(parts)
+    return parts
 
-for pos in merge.keys():
-    com = support[pos]
-    
-    lines = [by_name[name][pos] for name in sorted(com)]
+if options.verbatim:
+    for pos in merge.keys():
+        com = support[pos]
+        comstr = "(%s)" % ",".join(com)
+        cols = [comstr]
+        for name in com:
+            cols.append("%s : " % name)
+            cols.append(by_name[name][pos])
 
-    #for l in lines:
-        #print l
-    #if len(lines) > 1:
-        #print sorted(com)
-    print consensus_line(lines,comb)
+        print "\t".join(cols)
+       
+else:
+    for pos in merge.keys():
+        com = support[pos]
+        comstr = "(%s)" % ",".join(com)
+        lines = [by_name[name][pos] for name in com]
+        cols = [comstr] + consensus_cols(lines,comb)
+
+        print "\t".join(cols)
+
+
 #for names,inputs in zip(combinations(names
 
 
