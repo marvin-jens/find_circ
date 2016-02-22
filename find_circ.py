@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 import os,sys,re
 from collections import defaultdict
+from gzip import GzipFile
 import numpy as np
 from numpy import chararray as carray
 from numpy import fromstring,byte
@@ -387,7 +388,7 @@ parser.add_option("","--known-circ",dest="known_circ",type=str,default="",help="
 parser.add_option("","--known-lin",dest="known_lin",type=str,default="",help="file with known linear splice junctions (BED6)")
 parser.add_option("-o","--output",dest="output",default="find_circ_run",help="where to store output")
 parser.add_option("-q","--silent",dest="silent",default=False,action="store_true",help="suppress any normal output to stdout. Automatically switched on when using --stdout redirection")
-parser.add_option("","--stdout",dest="stdout",default=None,choices=['circs','lins','reads','stats','multi'],help="use to direct chosen type of output (sites, reads, stats, multi) to stdout instead of file")
+parser.add_option("","--stdout",dest="stdout",default=None,choices=['circs','lins','reads','multi'],help="use to direct chosen type of output (circs, lins, reads, multi) to stdout instead of file")
 parser.add_option("-n","--name",dest="name",default="unknown",help="tissue/sample name to use (default='unknown')")
 parser.add_option("","--min-uniq-qual",dest="min_uniq_qual",type=int,default=1,help="minimal uniqness for anchor alignments (default=2)")
 parser.add_option("-a","--anchor",dest="asize",type=int,default=15,help="anchor size (default=15)")
@@ -432,14 +433,14 @@ if not os.path.isdir(options.output):
     os.mkdir(options.output)
 
 # prepare logging system
-logging.basicConfig(level=logging.INFO,filename=os.path.join(options.output,"run.log"),filemode='w')
+FORMAT = '%(asctime)-20s\t%(levelname)s\t%(name)s\t%(message)s'
+logging.basicConfig(level=logging.INFO,format=FORMAT,filename=os.path.join(options.output,"run.log"),filemode='w')
 logger = logging.getLogger('find_circ')
 logger.info("find_circ {0} invoked as '{1}'".format(__version__," ".join(sys.argv)))
 
 circs_file = file(os.path.join(options.output,"circ_splice_sites.bed"),"w")
 lins_file  = file(os.path.join(options.output,"lin_splice_sites.bed"),"w")
-reads_file = file(os.path.join(options.output,"spliced_reads.fa"),"w")
-stats_file = file(os.path.join(options.output,"stats.log"),"w")
+reads_file = GzipFile(os.path.join(options.output,"spliced_reads.fastq.gz"),"w")
 multi_file = file(os.path.join(options.output,"multi_events.tsv"),"w")
 
 # redirect output to stdout, if requested
@@ -617,6 +618,28 @@ class Hit(object):
             categories.append("SHORT")
         elif end-start > options.huge_threshold:
             categories.append("HUGE")
+
+        unbroken_circread = 0 
+        unwarned_circread = 0
+        total = 0. 
+        for frag_name in self.read_flags.keys():
+            total += 1.
+            if not 'BROKEN_SEGMENTS' in self.read_flags[frag_name]:
+                unbroken_circread += 1
+
+            for w in self.read_flags[frag_name]:
+                if not w.startswith('WARN'):
+                    unwarned_circread += 1
+        
+        if total:
+            warn_ratio = 1. - unwarned_circread / total
+            broken_ratio = 1. - unbroken_circread / total
+            
+            if not unbroken_circread:
+                categories.append('WARN_ALWAYS_BROKEN')
+
+            if not unwarned_circread:
+                categories.append('WARN_ALWAYS_WARN')
 
         return categories
 
@@ -956,7 +979,7 @@ class MateSegments(object):
         for seg in self.other_chrom_segs:
             buf.append("other chrom >>> %s" % seg)
             
-        for seg in self.other_chrom_segs:
+        for seg in self.other_strand_segs:
             buf.append("other strand >>> %s" % seg)
         
         return "\n".join(buf)
@@ -1221,7 +1244,9 @@ def record_hits(frag_name, circ_junc_spans, linear_junc_spans, unspliced_mates, 
 def write_read(mate,junctions,flags):
     flag_str = ",".join(sorted(flags))
     junc_str = ",".join(sorted([j.name for j in junctions]))
-    reads_file.write(">%s %s %s\n%s\n" % (mate.primary.qname,junc_str,flag_str,mate.primary.seq))
+    #reads_file.write(">%s %s %s\n%s\n" % (mate.primary.qname,junc_str,flag_str,mate.primary.seq))
+    name = "%s %s %s" % (mate.primary.qname,junc_str,flag_str)
+    reads_file.write("@%s\n%s\n+%s\n%s\n" % (name,mate.primary.seq,name,mate.primary.qual))
 
     
 def collected_bwa_mem_segments(sam_input):
@@ -1268,7 +1293,7 @@ def main():
     
     def process_mate(mate):
         if len(mate.proper_segs) < 2:
-            N['unspliced_reads'] += 1
+            N['unspliced_mates'] += 1
             seg_unspliced.append(mate.primary)
             return
         
@@ -1295,6 +1320,12 @@ def main():
             seg_broken.extend(mate.other_chrom_segs)
             seg_broken.extend(mate.other_strand_segs)
 
+            if options.debug:
+                print "we have (at most) been able to assign pos {0}-{1} of this read!".format(min_s,max_e)
+                print "start-non-covered",mate.full_seq[0:min_s],"end-non-covered",mate.full_seq[max_e:]
+                print "these are unassigned segments we could have used"
+                for seg in seg_broken:
+                    print "broken_seg>>>",seg
                 
 
     from time import time
@@ -1373,6 +1404,9 @@ if options.profile:
 else:
     main()
 
-stats_file.write(str(N)+"\n")
+logger.info('run finished')
+for key in sorted(N.keys()):
+    logger.info('{0}={1}'.format(key,N[key]))
+
 circ_splices.store_list(circs_file)
 linear_splices.store_list(lins_file)
