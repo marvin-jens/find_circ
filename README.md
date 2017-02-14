@@ -32,9 +32,8 @@ purposes. Thank you very much for your understanding!
 
 ### License ###
 
-For non-commercial purposes the code is released under the General Public 
-License (version 3). See the file LICENSE for more detail. If you are
-interested in commercial use of this software contact the authors.
+The code is released under the General Public 
+License (version 3). See the file LICENSE for more detail.
 
 ### Brief version history ###
 
