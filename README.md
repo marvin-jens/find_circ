@@ -32,8 +32,8 @@ purposes. Thank you very much for your understanding!
 
 ### License ###
 
-The code is released under the General Public 
-License (version 3). See the file LICENSE for more detail.
+The code is released under the GNU General Public License (version 3).
+See the file `LICENSE` for more detail.
 
 ### Brief version history ###
 
